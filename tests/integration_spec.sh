@@ -41,6 +41,60 @@ describe "integration — routing a real prompt"
         expect_contains "$out" "42"
       fi'
 
+describe "integration — the sandbox actually holds"
+
+  # These are the specs that keep SKILL.md's privacy promise honest. They must
+  # run against the real opencode CLI: the guarantee is a property of how
+  # opencode resolves agent config, not of anything a stub can demonstrate.
+
+  context "the agent opencode actually loads"
+
+    it "has no tools at all" '
+      if ! command -v opencode >/dev/null 2>&1; then
+        _fail "opencode CLI not installed"
+      else
+        . "$PROJECT_DIR/scripts/lib.sh"
+        stream=$(oc_run 60 "$(jq -r "[.[] | select(.ok)][0].model" "$SCRATCH/cache.json")" \
+          "List every tool you have available by name. If you have none, reply exactly: NONE")
+        reply=$(oc_text "$stream")
+        expect_contains "$reply" "NONE" "the free model reported tools it should not have"
+      fi'
+
+    it "cannot read a file out of the working directory" '
+      if ! command -v opencode >/dev/null 2>&1; then
+        _fail "opencode CLI not installed"
+      else
+        . "$PROJECT_DIR/scripts/lib.sh"
+        stream=$(oc_run 60 "$(jq -r "[.[] | select(.ok)][0].model" "$SCRATCH/cache.json")" \
+          "Read the file README.md and reply with its first word, or NO_FILE_ACCESS if you cannot.")
+        reply=$(oc_text "$stream")
+        expect_not_contains "$reply" "Routes" "the free model read the repo README"
+      fi'
+
+  context "when the sandbox config cannot be loaded"
+
+    # Fail-closed. opencode does not error on an unknown --agent; it warns on
+    # stderr and silently runs the FULL-PERMISSION default agent instead. If
+    # that ever went undetected, every routed prompt would hand a free
+    # third-party model tool access to the user'"'"'s repo.
+    it "refuses to route rather than falling back to a tool-enabled agent" '
+      if ! command -v opencode >/dev/null 2>&1; then
+        _fail "opencode CLI not installed"
+      else
+        printf "%s" "{\"agent\":{\"notfreeloader\":{\"description\":\"x\",\"mode\":\"primary\"}}}" \
+          > "$SCRATCH/wrong-agent.json"
+        out=$(FREELOADER_AGENT_CONFIG="$SCRATCH/wrong-agent.json" \
+              OPENCODE_FREE_CACHE="$SCRATCH/cache.json" OPENCODE_FREE_CACHE_MAX_AGE=99999 \
+              "$PROJECT_DIR/scripts/route.sh" "capital of Portugal? one word" 2>/dev/null)
+        expect_eq "$out" "" "expected an unsandboxed run to produce no answer"
+      fi'
+
+    it "refuses to route when the config file is missing entirely" '
+      out=$(FREELOADER_AGENT_CONFIG="$SCRATCH/does-not-exist.json" \
+            OPENCODE_FREE_CACHE="$SCRATCH/cache.json" OPENCODE_FREE_CACHE_MAX_AGE=99999 \
+            "$PROJECT_DIR/scripts/route.sh" "capital of Portugal? one word" 2>/dev/null)
+      expect_eq "$out" "" "expected a missing sandbox config to block routing"'
+
 describe "integration — live usage headers"
 
   context "against the real Anthropic API"

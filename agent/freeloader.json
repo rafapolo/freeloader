@@ -1,0 +1,60 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+
+  "//": [
+    "Sandbox config for the freeloader agent, handed to opencode via",
+    "OPENCODE_CONFIG (see scripts/lib.sh -> oc_run). It exists for two reasons:",
+    "",
+    "1. SAFETY. `opencode run` defaults to the `build` agent, which is a full",
+    "   coding agent with filesystem tools and (per a typical opencode.jsonc)",
+    "   `permission: * -> allow`. Pointed at the user's repo, a free third-party",
+    "   model can read .env files, credentials and source on its own initiative",
+    "   and ship them off-machine. SKILL.md promises we never route private data;",
+    "   that promise is only real if the model has no way to go get any. Every",
+    "   tool is disabled below, and route.sh additionally runs opencode with",
+    "   --dir pointed at an empty scratch directory.",
+    "",
+    "2. COST. The build agent's system prompt plus tool schemas cost ~8,843",
+    "   tokens per call -- measured answering 'capital of Portugal? one word'",
+    "   (21 output tokens). Free tiers are rate-limited, so that overhead burns",
+    "   the quota roughly 400x faster than the actual work needs. Under this",
+    "   agent the same call costs ~490 tokens: an 18x reduction, almost all of",
+    "   it from not shipping tool schemas the model must never use anyway.",
+    "",
+    "This file is read-only config -- it never merges into the user's own",
+    "~/.config/opencode/opencode.jsonc."
+  ],
+
+  "agent": {
+    "freeloader": {
+      "description": "Answers one self-contained question. No tools, no filesystem, no repo access.",
+      "mode": "primary",
+      "prompt": "You answer a single self-contained question. Reply with the answer and nothing else -- no preamble, no restating the question, no offers of further help. If the question cannot be answered without information you were not given, say so in one sentence. You have no tools and no access to any filesystem, network, or repository.",
+      "//tools": [
+        "Every tool is named explicitly. A wildcard ({\"*\": false}) is NOT",
+        "supported -- it produces an empty response rather than a tool-less",
+        "agent -- so this list has to be maintained by hand. If opencode adds a",
+        "tool, it arrives ENABLED by default: re-check with the probe in",
+        "tests/integration_spec.sh, which asks a model to name its own tools.",
+        "websearch and skill are here because an early version omitted them and",
+        "the model reported both as available."
+      ],
+      "tools": {
+        "bash": false,
+        "edit": false,
+        "write": false,
+        "read": false,
+        "grep": false,
+        "glob": false,
+        "list": false,
+        "patch": false,
+        "todowrite": false,
+        "todoread": false,
+        "webfetch": false,
+        "websearch": false,
+        "skill": false,
+        "task": false
+      }
+    }
+  }
+}

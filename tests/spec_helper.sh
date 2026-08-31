@@ -96,6 +96,79 @@ stub_bin() {
   chmod +x "$STUB_BIN/$name"
 }
 
+# stub_opencode — writes a fake `opencode` that speaks the real CLI's contract:
+# it parses flags (rather than assuming argument positions, which shift whenever
+# lib.sh's oc_run changes) and emits a `--format json` event stream.
+#
+# Behaviour is chosen per-call via $RUN_BEHAVIOUR:
+#   ok             answer normally
+#   all_fail       exit non-zero
+#   fail_first     exit non-zero for the model named in $FAIL_MODEL
+#   error_stream   exit 0 but emit only {"type":"error"} — the real failure mode
+#                  that a naive "exit 0 means success" check misreads as an answer
+#   no_finish      emit text but never step_finish (cut off mid-answer)
+#   empty_reply    emit step_finish with no text at all
+#   agent_fallback answer, but warn on stderr that the sandboxed agent didn't load
+#   slow           hang, so timeout handling can be exercised
+#   echo           reply with the prompt it received
+stub_opencode() {
+  stub_bin opencode <<STUB
+#!/usr/bin/env bash
+sub="\$1"; shift
+
+if [ "\$sub" = "models" ]; then
+  # \$MODELS_EMPTY simulates a catalogue with no free models at all.
+  [ -n "\${MODELS_EMPTY:-}" ] && exit 0
+  cat "$FIXTURES/models_verbose.txt"; exit 0
+fi
+[ "\$sub" = "run" ] || exit 0
+
+model=""; prompt=""; agent=""
+while [ \$# -gt 0 ]; do
+  case "\$1" in
+    -m|--model)  model="\$2"; shift 2 ;;
+    --agent)     agent="\$2"; shift 2 ;;
+    --dir|--format) shift 2 ;;
+    --pure)      shift ;;
+    *)           prompt="\$1"; shift ;;
+  esac
+done
+
+emit_text()   { printf '{"type":"text","part":{"text":"%s"}}\n' "\$1"; }
+emit_finish() { printf '{"type":"step_finish","part":{"reason":"stop","tokens":{"input":100,"output":20,"total":120}}}\n'; }
+emit_error()  { printf '{"type":"error","error":{"name":"UnknownError","data":{"message":"%s"}}}\n' "\$1"; }
+
+# Answer whichever probe benchmark.sh is running, so ranking specs work.
+case "\$prompt" in
+  *pong*) answer="pong" ;;
+  *17*)   answer="391" ;;
+  *)      answer="4" ;;
+esac
+
+case "\${RUN_BEHAVIOUR:-ok}" in
+  all_fail)     exit 1 ;;
+  fail_first)   [ "\$model" = "\${FAIL_MODEL:-}" ] && exit 1 ;;
+  error_stream) emit_error "Unexpected server error."; exit 0 ;;
+  no_finish)    emit_text "\$answer"; exit 0 ;;
+  empty_reply)  emit_finish; exit 0 ;;
+  agent_fallback)
+    echo '! agent "freeloader" not found. Falling back to default agent' >&2 ;;
+  slow)         sleep 10 ;;
+  echo)         answer="answered: \$prompt" ;;
+esac
+
+# Per-model pacing, so latency ranking has something to sort on.
+case "\$model" in
+  */brace-in-string) sleep 0.3 ;;
+  */go-free)         sleep 0.2 ;;
+  */big-pickle)      sleep 0.1 ;;
+esac
+
+emit_text "\$answer"
+emit_finish
+STUB
+}
+
 spec_summary() {
   printf '\n%s examples, %s failures\n' "$EXAMPLES_RUN" "$EXAMPLES_FAILED"
   [ "$EXAMPLES_FAILED" -eq 0 ] || return 1
