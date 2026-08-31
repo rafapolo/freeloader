@@ -1,4 +1,4 @@
-# freeloader
+<p align="center"><img src="assets/logo.png" alt="freeloader" width="320"></p>
 
 Routes cheap, low-stakes prompts from Claude Code to a free-tier model via the `opencode` CLI, and reads the answer back — so trivial requests cost $0 instead of Claude tokens.
 
