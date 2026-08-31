@@ -57,12 +57,18 @@ scripts/usage.sh          # human-readable
 scripts/usage.sh --json   # machine-readable
 ```
 
-Credentials: `$ANTHROPIC_AUTH_TOKEN` / `$ANTHROPIC_API_KEY` if set, else (macOS
-only) the OAuth token Claude Code itself already has cached in the Keychain
-("Claude Code-credentials"). **The token is never printed** — it's read into
-a variable, used inline in one `curl` header, and any temp file holding it is
-deleted immediately after. Only the resulting rate-limit numbers (status /
-utilization / reset time) are ever written to stdout.
+Credentials, in order: `$ANTHROPIC_AUTH_TOKEN` / `$ANTHROPIC_API_KEY` if set
+(portable, works anywhere) → macOS Keychain ("Claude Code-credentials",
+**tested**) → Linux Secret Service via `secret-tool` (`apt install
+libsecret-tools` on Debian, `pacman -S libsecret` on Arch — **unverified**,
+assumes the same service label Claude Code uses on macOS) → a plain
+`~/.claude/.credentials.json` / `~/.config/claude-code/.credentials.json`
+file as a last resort on headless Linux (**unverified**). If auto-discovery
+comes up empty on Linux, set `ANTHROPIC_AUTH_TOKEN` explicitly — it's the one
+path guaranteed to work everywhere. **The token is never printed** — it's
+read into a variable, used inline in one `curl` header, and any temp file
+holding it is deleted immediately after. Only the resulting rate-limit
+numbers (status / utilization / reset time) are ever written to stdout.
 
 ## TODO
 
@@ -81,7 +87,9 @@ utilization / reset time) are ever written to stdout.
 - [`opencode`](https://opencode.ai) CLI, installed and authenticated
   (`opencode providers list` should show at least one provider)
 - `jq`
-- For `scripts/usage.sh`: a valid Claude API/OAuth credential (see above)
+- For `scripts/usage.sh`: `python3`, and a valid Claude API/OAuth credential
+  (see Usage monitoring above); `secret-tool` only if relying on Linux
+  Secret Service auto-discovery instead of an env var
 
 ## Status
 

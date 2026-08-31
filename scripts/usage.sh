@@ -20,25 +20,50 @@ TOKEN=""
 AUTH_HEADER="Authorization"
 AUTH_VALUE=""
 
+# Pull the accessToken out of the same {"claudeAiOauth": {"accessToken": ...}}
+# shape Claude Code stores, given raw JSON text on stdin. Shared by every
+# credential-store backend below so each just has to produce that JSON.
+extract_access_token() {
+  python3 -c "import json,sys; print(json.load(sys.stdin)['claudeAiOauth']['accessToken'])" 2>/dev/null
+}
+
 if [ -n "${ANTHROPIC_AUTH_TOKEN:-}" ]; then
+  # Portable, tested on every OS — prefer this if you have it.
   AUTH_VALUE="Bearer ${ANTHROPIC_AUTH_TOKEN}"
 elif [ -n "${ANTHROPIC_API_KEY:-}" ]; then
   AUTH_HEADER="x-api-key"
   AUTH_VALUE="${ANTHROPIC_API_KEY}"
-elif command -v security >/dev/null 2>&1; then
-  TMPCRED=$(mktemp)
-  if security find-generic-password -s "Claude Code-credentials" -w > "$TMPCRED" 2>/dev/null; then
-    TOKEN=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['claudeAiOauth']['accessToken'])" "$TMPCRED" 2>/dev/null)
-  fi
-  rm -f "$TMPCRED"
-  if [ -n "$TOKEN" ]; then
-    AUTH_VALUE="Bearer ${TOKEN}"
-  fi
+elif [ "$(uname -s)" = "Darwin" ] && command -v security >/dev/null 2>&1; then
+  # macOS Keychain — tested, this is what Claude Code itself uses.
+  TOKEN=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null | extract_access_token)
+  [ -n "$TOKEN" ] && AUTH_VALUE="Bearer ${TOKEN}"
+elif command -v secret-tool >/dev/null 2>&1; then
+  # Linux (Debian/Arch) with a Secret Service provider (GNOME Keyring /
+  # KWallet via libsecret — `apt install libsecret-tools` or
+  # `pacman -S libsecret`). Best-effort: this assumes Claude Code stored its
+  # credential under this same service label, which isn't verified in this
+  # environment (only the macOS path above was actually tested) — if it
+  # comes up empty, fall back to ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY.
+  TOKEN=$(secret-tool lookup service "Claude Code-credentials" 2>/dev/null | extract_access_token)
+  [ -n "$TOKEN" ] && AUTH_VALUE="Bearer ${TOKEN}"
+fi
+
+if [ -z "$AUTH_VALUE" ] && [ -z "${ANTHROPIC_AUTH_TOKEN:-}${ANTHROPIC_API_KEY:-}" ]; then
+  # Last resort on Linux boxes with no Secret Service daemon (headless
+  # servers, minimal window managers): some Claude Code installs fall back
+  # to a plain credentials file. Also unverified here — treat as a guess.
+  for f in "$HOME/.claude/.credentials.json" "$HOME/.config/claude-code/.credentials.json"; do
+    if [ -f "$f" ]; then
+      TOKEN=$(extract_access_token < "$f")
+      [ -n "$TOKEN" ] && { AUTH_VALUE="Bearer ${TOKEN}"; break; }
+    fi
+  done
 fi
 
 if [ -z "$AUTH_VALUE" ]; then
-  echo "No credentials found. Set ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY," >&2
-  echo "or run this on macOS while logged into Claude Code." >&2
+  echo "No credentials found. Set ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY" >&2
+  echo "(most reliable on Linux), or run this while logged into Claude Code" >&2
+  echo "on macOS (Keychain) or Linux with a Secret Service daemon running." >&2
   exit 1
 fi
 
@@ -46,6 +71,18 @@ HEADERS_FILE=$(mktemp)
 BODY_FILE=$(mktemp)
 trap 'rm -f "$HEADERS_FILE" "$BODY_FILE"' EXIT
 
+# These two are version pins, not constants — re-check them periodically:
+#  - anthropic-version: the general API version header. Changes rarely;
+#    2023-06-01 has been current since launch, but confirm against
+#    https://platform.claude.com/docs/en/api/versioning if requests start
+#    failing for no other reason.
+#  - anthropic-beta: oauth-2025-04-20 is a dated beta flag specifically for
+#    OAuth bearer-token auth on /v1/messages. Beta flags like this are the
+#    most likely thing here to drift (get superseded by a newer dated flag,
+#    or the feature could go GA and drop the header entirely). If auth starts
+#    failing only for OAuth tokens (not for ANTHROPIC_API_KEY), check here
+#    first — see shared/anthropic-cli.md in the claude-api skill, or WebFetch
+#    the OAuth docs, for the current value.
 http_status=$(curl -sS -o "$BODY_FILE" -D "$HEADERS_FILE" -w '%{http_code}' \
   https://api.anthropic.com/v1/messages \
   -H "${AUTH_HEADER}: ${AUTH_VALUE}" \
