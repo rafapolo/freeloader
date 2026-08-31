@@ -44,11 +44,44 @@ See `SKILL.md` for the exact criteria Claude uses to decide a prompt is
 (anything needing repo context, edits, tool calls, judgment, or involving
 sensitive data).
 
+## Usage monitoring
+
+`scripts/usage.sh` reports your live Claude subscription rate-limit usage
+(5h and 7d windows) by making one minimal Messages API call and reading the
+`anthropic-ratelimit-unified-*` response headers — the same numbers Claude
+Code itself is bound by. It costs a handful of real tokens each run (these
+headers are only returned by `/v1/messages`, not by lighter endpoints).
+
+```
+scripts/usage.sh          # human-readable
+scripts/usage.sh --json   # machine-readable
+```
+
+Credentials: `$ANTHROPIC_AUTH_TOKEN` / `$ANTHROPIC_API_KEY` if set, else (macOS
+only) the OAuth token Claude Code itself already has cached in the Keychain
+("Claude Code-credentials"). **The token is never printed** — it's read into
+a variable, used inline in one `curl` header, and any temp file holding it is
+deleted immediately after. Only the resulting rate-limit numbers (status /
+utilization / reset time) are ever written to stdout.
+
+## TODO
+
+- **Time-boxed task / auto-offload trigger.** Wire `usage.sh` into a periodic
+  check (e.g. a `/loop` or `ScheduleWakeup` poll every N minutes) that reads
+  `five_hour.utilization` / `seven_day.utilization` from `--json` output, and
+  once either crosses **0.8**, automatically switches Claude's behavior for
+  the rest of the window: stop answering "cheap" prompts directly and route
+  them through `scripts/route.sh` without asking, resuming normal behavior
+  once utilization drops back down after the window resets. `usage.sh`
+  already prints a one-line hint above 0.8 (stderr) — this TODO is about
+  actually *acting* on it automatically instead of just surfacing it.
+
 ## Requirements
 
 - [`opencode`](https://opencode.ai) CLI, installed and authenticated
   (`opencode providers list` should show at least one provider)
 - `jq`
+- For `scripts/usage.sh`: a valid Claude API/OAuth credential (see above)
 
 ## Status
 
