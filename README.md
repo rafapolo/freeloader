@@ -49,8 +49,15 @@ sensitive data).
 `scripts/usage.sh` reports your live Claude subscription rate-limit usage
 (5h and 7d windows) by making one minimal Messages API call and reading the
 `anthropic-ratelimit-unified-*` response headers — the same numbers Claude
-Code itself is bound by. It costs a handful of real tokens each run (these
-headers are only returned by `/v1/messages`, not by lighter endpoints).
+Code itself is bound by. Note these are the *subscription* headers (Pro/Max
+5h + 7d windows), not the per-minute `x-ratelimit-*` headers a standalone API
+key gets. Besides `utilization`, each window carries a `status` that shifts
+from `allowed` to `allowed_warning` as you approach the cap.
+
+It costs a handful of real tokens each run: those headers come back only from
+`/v1/messages`. Lighter endpoints were tested and do **not** carry them —
+`GET /v1/models` and `POST /v1/messages/count_tokens` both return 200 with no
+`anthropic-ratelimit-*` headers at all, so there is no free way to poll this.
 
 ```
 scripts/usage.sh          # human-readable
@@ -72,7 +79,7 @@ numbers (status / utilization / reset time) are ever written to stdout.
 
 ## Conserve mode (usage-aware auto-offload)
 
-`scripts/tick.py` is called once per user turn from `SKILL.md`'s workflow.
+`scripts/tick.sh` is called once per user turn from `SKILL.md`'s workflow.
 It's a message-count trigger, not a wall-clock one (`/loop`/`ScheduleWakeup`
 only wake on a timer, which doesn't map cleanly to "every N messages" — a
 plain per-turn counter does, with no scheduler needed):
@@ -96,14 +103,33 @@ poller (via the `schedule` skill) independent of any open session was
 considered and rejected in favor of this simpler, message-driven approach;
 revisit it if you want conserve mode to persist across sessions.
 
+## Tests
+
+```
+tests/run.sh                 # full hermetic suite
+tests/run.sh route           # only specs matching "route"
+INTEGRATION=1 tests/run.sh   # also hit the real opencode CLI + Anthropic API
+```
+
+RSpec-flavoured `describe`/`context`/`it` blocks in plain bash, no dependencies.
+The default suite is **hermetic** — it stubs `opencode`, `curl` and `security`,
+so it touches no network, no Keychain, and no token budget. The live
+`integration_spec.sh` is skipped unless `INTEGRATION=1`, because it spends real
+tokens. Coverage includes the two regressions that used to silently break the
+skill (a missing `timeout` marking every model broken; the brace-counting
+parser dropping a working model) and an assertion that no credential ever
+reaches stdout or stderr — verified to actually fail when a leak is introduced.
+
 ## Requirements
 
 - [`opencode`](https://opencode.ai) CLI, installed and authenticated
   (`opencode providers list` should show at least one provider)
-- `jq`
-- For `scripts/usage.sh` and `scripts/tick.py`: `python3`, and a valid Claude
-  API/OAuth credential (see Usage monitoring above); `secret-tool` only if
-  relying on Linux Secret Service auto-discovery instead of an env var
+- `jq` — the only hard dependency beyond coreutils; every script is bash + jq
+- For `scripts/usage.sh` and `scripts/tick.sh`: a valid Claude API/OAuth
+  credential (see Usage monitoring above); `secret-tool` only if relying on
+  Linux Secret Service auto-discovery instead of an env var
+- `timeout`/`gtimeout` is used when present, but is **not** required — a
+  pure-shell watchdog covers a stock macOS without coreutils
 
 ## Status
 

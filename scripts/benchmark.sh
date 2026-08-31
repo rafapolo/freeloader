@@ -8,6 +8,9 @@
 #   [{"model":"opencode/mimo-v2.5-free","latency_ms":1830,"ok":true}, ...]
 set -uo pipefail
 
+# shellcheck source=lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+
 CANARY="Reply with exactly: pong"
 CACHE="${OPENCODE_FREE_CACHE:-$HOME/.cache/opencode-free-models.json}"
 TIMEOUT_SECS="${OPENCODE_FREE_BENCH_TIMEOUT:-30}"
@@ -33,35 +36,24 @@ trap 'rm -rf "$TMPDIR"' EXIT
 # Discover free models from real cost metadata (`opencode models --verbose`),
 # not from a "free" substring in the model name -- some genuinely free models
 # don't have "free" in their id (e.g. opencode/big-pickle), and name-matching
-# would silently miss them. --verbose prints "provider/model" header lines
-# followed by a pretty-printed JSON block per model; the awk pass re-joins
-# each block onto one line (tracking brace depth) so jq can read it.
+# would silently miss them.
+#
+# --verbose prints a "provider/model" header line followed by a pretty-printed
+# JSON block per model. Rather than parse that mixed stream, drop the header
+# lines entirely and let jq consume the remaining concatenated JSON objects
+# natively -- each block already carries `providerID` and `id`, so the header
+# is redundant. (An earlier version brace-counted the blocks back onto single
+# lines in awk; that desynchronised and silently dropped
+# opencode/muse-spark-1.2-contributor-free, one of the *fastest* free models.)
 discover_free_models() {
-  opencode models --verbose 2>/dev/null | awk '
-    BEGIN { buf=""; depth=0; header="" }
-    /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/ && depth==0 {
-      if (header != "") printf "%s\t%s\n", header, buf
-      header=$0; buf=""; next
-    }
-    {
-      line=$0
-      buf = buf line
-      o = gsub(/{/,"{",line)
-      c = gsub(/}/,"}",line)
-      depth += o - c
-    }
-    END { if (header != "") printf "%s\t%s\n", header, buf }
-  ' | while IFS=$'\t' read -r header json; do
-      provider="${header%%/*}"
-      case " $FREE_PROVIDERS " in
-        *" $provider "*) ;;
-        *) continue ;;
-      esac
-      # Skip entries whose JSON block didn't survive the line-rejoin (e.g. a
-      # description containing a literal newline) rather than error out.
-      is_free=$(printf '%s' "$json" | jq -r '((.cost.input // 1) == 0) and ((.cost.output // 1) == 0)' 2>/dev/null) || continue
-      [ "$is_free" = "true" ] && echo "$header"
-    done
+  opencode models --verbose 2>/dev/null \
+    | grep -v -E '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' \
+    | jq -r --arg providers "$FREE_PROVIDERS" '
+        ($providers | split(" ")) as $allowed
+        | select((.cost.input // 1) == 0 and (.cost.output // 1) == 0)
+        | select(.providerID as $p | $allowed | index($p))
+        | "\(.providerID)/\(.id)"
+      ' 2>/dev/null
 }
 
 models=()
@@ -78,7 +70,7 @@ bench_one() {
   local model="$1" outfile="$2"
   local start end ms out status ok
   start=$(date +%s%N)
-  out=$(timeout "$TIMEOUT_SECS" opencode run -m "$model" "$CANARY" 2>&1)
+  out=$(run_with_timeout "$TIMEOUT_SECS" opencode run -m "$model" "$CANARY" 2>&1)
   status=$?
   end=$(date +%s%N)
   ms=$(( (end - start) / 1000000 ))

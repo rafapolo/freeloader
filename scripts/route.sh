@@ -10,10 +10,22 @@
 # On failure: NO_FREE_MODEL_AVAILABLE or ALL_FREE_MODELS_FAILED on stderr, exit 1.
 set -uo pipefail
 
+# shellcheck source=lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CACHE="${OPENCODE_FREE_CACHE:-$HOME/.cache/opencode-free-models.json}"
 MAX_AGE_SECS="${OPENCODE_FREE_CACHE_MAX_AGE:-86400}"  # 24h
+# Hard ceiling per model. By default the real per-model budget is derived from
+# that model's measured benchmark latency (see below) so a model that pinged in
+# 4s doesn't hold the user for a full minute before we fall through to the next
+# one; set OPENCODE_FREE_RUN_TIMEOUT to pin every model to a fixed value.
 RUN_TIMEOUT_SECS="${OPENCODE_FREE_RUN_TIMEOUT:-60}"
+ADAPTIVE_TIMEOUT="${OPENCODE_FREE_ADAPTIVE_TIMEOUT:-true}"
+# A real prompt does more work than the one-word canary, so scale the measured
+# latency up generously before using it as a deadline.
+LATENCY_MULTIPLIER="${OPENCODE_FREE_LATENCY_MULTIPLIER:-6}"
+MIN_TIMEOUT_SECS="${OPENCODE_FREE_MIN_TIMEOUT:-20}"
 
 prompt="${1:-}"
 if [ -z "$prompt" ] && [ ! -t 0 ]; then
@@ -43,18 +55,31 @@ if [ ! -f "$CACHE" ]; then
   exit 1
 fi
 
+# Carry each candidate's measured canary latency along with its name, so the
+# per-model deadline can be derived from it. Tab-separated: "<model>\t<ms>".
 candidates=()
 while IFS= read -r line; do
   [ -n "$line" ] && candidates+=("$line")
-done < <(jq -r '.[] | select(.ok==true) | .model' "$CACHE")
+done < <(jq -r '.[] | select(.ok==true) | "\(.model)\t\(.latency_ms)"' "$CACHE")
 
 if [ "${#candidates[@]}" -eq 0 ]; then
   echo "NO_FREE_MODEL_AVAILABLE" >&2
   exit 1
 fi
 
-for m in "${candidates[@]}"; do
-  out=$(timeout "$RUN_TIMEOUT_SECS" opencode run -m "$m" "$prompt" 2>/dev/null)
+for entry in "${candidates[@]}"; do
+  m="${entry%%$'\t'*}"
+  latency_ms="${entry##*$'\t'}"
+
+  budget="$RUN_TIMEOUT_SECS"
+  if [ "$ADAPTIVE_TIMEOUT" = "true" ] && [ "$latency_ms" -gt 0 ] 2>/dev/null; then
+    scaled=$(( (latency_ms * LATENCY_MULTIPLIER + 999) / 1000 ))
+    [ "$scaled" -lt "$MIN_TIMEOUT_SECS" ] && scaled="$MIN_TIMEOUT_SECS"
+    [ "$scaled" -gt "$RUN_TIMEOUT_SECS" ] && scaled="$RUN_TIMEOUT_SECS"
+    budget="$scaled"
+  fi
+
+  out=$(run_with_timeout "$budget" opencode run -m "$m" "$prompt" 2>/dev/null)
   status=$?
   if [ $status -eq 0 ] && [ -n "$out" ]; then
     printf '%s\n' "$out"

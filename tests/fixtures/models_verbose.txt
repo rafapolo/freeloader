@@ -1,0 +1,88 @@
+opencode/free-classic
+{
+  "id": "free-classic",
+  "providerID": "opencode",
+  "name": "Free Classic",
+  "description": "A free model whose id contains the word free",
+  "cost": {
+    "input": 0,
+    "output": 0,
+    "cache": {
+      "read": 0,
+      "write": 0
+    }
+  },
+  "limit": {
+    "context": 200000
+  }
+}
+opencode/big-pickle
+{
+  "id": "big-pickle",
+  "providerID": "opencode",
+  "name": "Big Pickle",
+  "description": "Genuinely $0 but has no 'free' substring in its id — a name-based grep would silently miss this one",
+  "cost": {
+    "input": 0,
+    "output": 0,
+    "cache": {
+      "read": 0,
+      "write": 0
+    }
+  }
+}
+opencode/brace-in-string
+{
+  "id": "brace-in-string",
+  "providerID": "opencode",
+  "name": "Brace In String",
+  "description": "Uses {curly braces} and a } inside this string, which desynchronised the old brace-counting parser",
+  "cost": {
+    "input": 0,
+    "output": 0
+  }
+}
+opencode/paid-model
+{
+  "id": "paid-model",
+  "providerID": "opencode",
+  "name": "Paid Model",
+  "description": "Costs real money — must never be treated as free",
+  "cost": {
+    "input": 3,
+    "output": 15
+  }
+}
+opencode/output-only-cost
+{
+  "id": "output-only-cost",
+  "providerID": "opencode",
+  "name": "Output Only Cost",
+  "description": "Free input but paid output — still not free",
+  "cost": {
+    "input": 0,
+    "output": 5
+  }
+}
+openai/gpt-zero-cost
+{
+  "id": "gpt-zero-cost",
+  "providerID": "openai",
+  "name": "GPT Zero Cost",
+  "description": "Reports cost 0 but is a bring-your-own-key provider; routing here would bill the user's own account",
+  "cost": {
+    "input": 0,
+    "output": 0
+  }
+}
+opencode-go/go-free
+{
+  "id": "go-free",
+  "providerID": "opencode-go",
+  "name": "Go Free",
+  "description": "Free model on opencode's second hosted tier",
+  "cost": {
+    "input": 0,
+    "output": 0
+  }
+}

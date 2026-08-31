@@ -45,7 +45,7 @@ cheap enough" bar, not the hard no-route list.
    file I/O on 4 out of every 5 calls):
 
    ```
-   scripts/tick.py
+   scripts/tick.sh
    ```
 
    Reads/writes `~/.cache/freeloader-state.json` and prints one line of JSON:
@@ -107,5 +107,13 @@ cheap enough" bar, not the hard no-route list.
 - Free models vary wildly in latency (single-digit seconds to 20s+) and some
   listed "free" models can error out entirely (unsupported, server errors) —
   that's exactly what the benchmark's `ok`/`latency_ms` ranking filters for.
-- Per-model timeout for real (non-benchmark) requests is 60s
-  (`OPENCODE_FREE_RUN_TIMEOUT`). Raise it for prompts you know are longer.
+- Per-model timeout for real requests is derived from that model's measured
+  benchmark latency (6x, floored at 20s, capped by `OPENCODE_FREE_RUN_TIMEOUT`
+  at 60s), so a model that pinged in 4s doesn't hold the user for a full
+  minute before falling through. Set `OPENCODE_FREE_ADAPTIVE_TIMEOUT=false` to
+  pin every model to the flat ceiling instead.
+- `timeout` is not part of a stock macOS. `scripts/lib.sh` resolves
+  `timeout`/`gtimeout` when present and falls back to a pure-shell watchdog —
+  without it, a missing `timeout` exits 127 and every model reads as broken.
+- Run `tests/run.sh` after changing any script; the suite is hermetic (stubs
+  `opencode`/`curl`/`security`, spends no tokens).

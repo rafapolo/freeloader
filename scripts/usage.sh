@@ -23,8 +23,9 @@ AUTH_VALUE=""
 # Pull the accessToken out of the same {"claudeAiOauth": {"accessToken": ...}}
 # shape Claude Code stores, given raw JSON text on stdin. Shared by every
 # credential-store backend below so each just has to produce that JSON.
+# `// empty` keeps a malformed/absent field from yielding the string "null".
 extract_access_token() {
-  python3 -c "import json,sys; print(json.load(sys.stdin)['claudeAiOauth']['accessToken'])" 2>/dev/null
+  jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null
 }
 
 if [ -n "${ANTHROPIC_AUTH_TOKEN:-}" ]; then
