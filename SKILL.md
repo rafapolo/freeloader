@@ -32,7 +32,34 @@ Do NOT route when the request:
 If genuinely unsure, don't route — just answer normally. Never route silently
 on a request that explicitly names Claude or asks for your own reasoning.
 
+**Exception — conserve mode (see Workflow step 0):** once `conserve_mode` is
+`true`, widen this: route anything that isn't clearly repo-context, tool use,
+multi-step judgment, or sensitive — even prompts you'd otherwise leave to
+yourself as borderline. Still never route on a request that explicitly names
+Claude or the sensitive-content case above; conserve mode changes the "is it
+cheap enough" bar, not the hard no-route list.
+
 ## Workflow
+
+0. **Every turn**, tick the usage-aware conserve mode (cheap — pure local
+   file I/O on 4 out of every 5 calls):
+
+   ```
+   scripts/tick.py
+   ```
+
+   Reads/writes `~/.cache/freeloader-state.json` and prints one line of JSON:
+   `{"conserve_mode": bool, "turns_since_check": int, "checked_at": ..., "last_check": {...}}`.
+   Every 5th call (`FREELOADER_REFRESH_EVERY`, default 5) it shells out to
+   `scripts/usage.sh --json` for real — spending a few real tokens — and sets
+   `conserve_mode` from whether `five_hour.utilization` or
+   `seven_day.utilization` crossed `FREELOADER_UTIL_THRESHOLD` (default
+   `0.8`); the other 4 calls just read the cached value. If the refresh
+   itself fails (no credentials, network), it keeps the previous
+   `conserve_mode` and retries next turn rather than waiting a full cycle.
+   Read `conserve_mode` from the output and apply the widened routing rule
+   above when it's `true`. `last_check` carries the actual utilization
+   numbers if you want to tell the user why you're routing more aggressively.
 
 1. **First use in a session (or if the cache looks stale/empty):** run the
    benchmark once, up front, so later routing is instant:

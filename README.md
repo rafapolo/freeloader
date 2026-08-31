@@ -70,26 +70,40 @@ read into a variable, used inline in one `curl` header, and any temp file
 holding it is deleted immediately after. Only the resulting rate-limit
 numbers (status / utilization / reset time) are ever written to stdout.
 
-## TODO
+## Conserve mode (usage-aware auto-offload)
 
-- **Time-boxed task / auto-offload trigger.** Wire `usage.sh` into a periodic
-  check (e.g. a `/loop` or `ScheduleWakeup` poll every N minutes) that reads
-  `five_hour.utilization` / `seven_day.utilization` from `--json` output, and
-  once either crosses **0.8**, automatically switches Claude's behavior for
-  the rest of the window: stop answering "cheap" prompts directly and route
-  them through `scripts/route.sh` without asking, resuming normal behavior
-  once utilization drops back down after the window resets. `usage.sh`
-  already prints a one-line hint above 0.8 (stderr) — this TODO is about
-  actually *acting* on it automatically instead of just surfacing it.
+`scripts/tick.py` is called once per user turn from `SKILL.md`'s workflow.
+It's a message-count trigger, not a wall-clock one (`/loop`/`ScheduleWakeup`
+only wake on a timer, which doesn't map cleanly to "every N messages" — a
+plain per-turn counter does, with no scheduler needed):
+
+- 4 out of every 5 calls (`FREELOADER_REFRESH_EVERY`, default 5): pure local
+  file I/O against `~/.cache/freeloader-state.json` — free.
+- Every 5th call: shells out to `scripts/usage.sh --json` for real (spends a
+  few tokens), and sets `conserve_mode = true` once `five_hour.utilization`
+  or `seven_day.utilization` crosses `FREELOADER_UTIL_THRESHOLD` (default
+  `0.8`). A failed refresh (no credentials, network) keeps the previous
+  `conserve_mode` and retries next turn instead of waiting a full cycle.
+
+When `conserve_mode` is `true`, `SKILL.md` widens what counts as "cheap
+enough to route" for the rest of the window — see the Workflow / "Is this
+prompt cheap?" sections — until utilization drops back down after the 5h/7d
+window resets.
+
+Caveat: this only runs while an interactive session is open and actually
+invoking the skill each turn — it's not a background daemon. A cron-based
+poller (via the `schedule` skill) independent of any open session was
+considered and rejected in favor of this simpler, message-driven approach;
+revisit it if you want conserve mode to persist across sessions.
 
 ## Requirements
 
 - [`opencode`](https://opencode.ai) CLI, installed and authenticated
   (`opencode providers list` should show at least one provider)
 - `jq`
-- For `scripts/usage.sh`: `python3`, and a valid Claude API/OAuth credential
-  (see Usage monitoring above); `secret-tool` only if relying on Linux
-  Secret Service auto-discovery instead of an env var
+- For `scripts/usage.sh` and `scripts/tick.py`: `python3`, and a valid Claude
+  API/OAuth credential (see Usage monitoring above); `secret-tool` only if
+  relying on Linux Secret Service auto-discovery instead of an env var
 
 ## Status
 
