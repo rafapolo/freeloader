@@ -45,9 +45,46 @@ measured live across all three modes with a conservative 30k-token context:
 large tool result is re-read on *every* later turn, not just the one it arrives
 on — so this is the mode with the most headroom, by a wide margin.
 
-The sign flips purely on *where* the route is made. That is why the two hooks
-below exist, why they need nothing from the model, and why `stats.sh` now
-reports a `net` column that is allowed to be negative.
+The sign flips purely on *where* the route is made. That is why `cap` exists,
+why it needs nothing from the model, and why `stats.sh` reports a `net` column
+that is allowed to be negative.
+
+### The second uncomfortable finding: `hook` mode is off
+
+`hook` mode has the best per-route economics in that table and **ships
+disabled**, because the same discipline applied to it a second time.
+
+Shadow-tested against **7,311 real prompts** from `~/.claude/projects` — decided
+locally by the real `triage.sh`, no model called, nothing read into a context
+window — it would have fired on **34 of them (0.47%)**. Hand-checking 12 of
+those 34 found **1** that was genuinely safe:
+
+| prompt | why it was wrong |
+|---|---|
+| `what are the themes?` | subject is in the conversation |
+| `whats next?` | subject is in the conversation |
+| `where is MInc salic data?` | repo-specific |
+| `whats to be done on tasks/ ?` | names a directory |
+| `how many pages are all pdfs in print/ ?` | needs the filesystem |
+| `whats a slurm?` | ✅ actually general knowledge |
+
+The failure is not a loose regex, and tightening one will not fix it: **"what
+are the themes?" and "what is the capital of Portugal?" are syntactically
+identical.** What separates them is whether the referent lives in the
+conversation — a semantic question a shape-matcher cannot answer. And the prize
+for getting it perfectly right would have been **$0.22–$0.83 across that entire
+history**.
+
+So the trade was: under a dollar, against a free model confidently answering
+questions about your repo it has never seen, with the Claude turn that would
+have caught it never running. The hook is kept, tested, and off; opt in with
+`FREELOADER_INTERCEPT=1` only behind a triage that decides on meaning.
+
+**The generalisable lesson: `cap` wins because it never has to guess.** It
+compresses output that has already been produced, so being wrong costs
+fidelity, not correctness. `hook` had to predict whether a question was
+answerable before anyone had looked at it — and that prediction is the whole
+problem.
 
 ## How it works
 
@@ -153,18 +190,17 @@ that reason.
 | `hook` | `intercept-hook.sh`, before the turn exists | the entire turn — context read plus output | nothing |
 | `cap` | `cap-hook.sh`, around a noisy command | the tokens that never entered context, on this turn and every later one | nothing |
 
-**Intercepting** (`hooks/intercept-hook.sh`, `UserPromptSubmit`) — answers a
-trivially self-contained prompt from a free model and denies the prompt, so no
-Claude turn happens at all. `scripts/triage.sh` decides, through four
-independent gates: short and single-line, no word pointing outside the prompt
-(pronouns, possessives, paths, task verbs, "claude"), a positive match against a
-small allowlist of question shapes, and scan-clean. The asymmetry justifies the
-strictness — a false negative costs nothing, while a false positive means a
-model that has never seen your repo answers a question about it, with the turn
-that would have caught the mistake never running. It fails open everywhere: no
-`jq`, no free model, a slow model, an empty reply, an unloaded sandbox — all of
-it just lets the prompt through. The answer is labelled, and prefixing any
-prompt with `claude,` forces a normal turn.
+**Intercepting** (`hooks/intercept-hook.sh`, `UserPromptSubmit`) — **off by
+default**, see the finding above. It answers a trivially self-contained prompt
+from a free model and denies the prompt, so no Claude turn happens at all.
+`scripts/triage.sh` gates it behind four tests: short and single-line, no word
+pointing outside the prompt (pronouns, possessives, paths, task verbs,
+"claude"), a positive match against a small allowlist of question shapes, and
+scan-clean. That was strict enough to reject 99.5% of real prompts and still
+wrong on most of what it let through. The mechanism itself is sound and tested
+— it fails open on a missing `jq`, a dead model, a slow model, an empty reply or
+an unloaded sandbox, labels every answer, and treats a leading `claude,` as an
+override — but the triage in front of it is not, so it stays disabled.
 
 **Capping** (`hooks/cap-hook.sh`, `PreToolUse` → `scripts/cap.sh`) — the biggest
 saving here, and the least glamorous. A 40k-token test log costs input tokens on
@@ -217,9 +253,12 @@ cannot see it and none of this ever runs. Three hooks are registered:
 before merging, preserves hooks already there, and removes only its own on
 `--uninstall`. Restart Claude Code afterwards.
 
-`--no-hook` leaves only hand-routing from inside a Claude turn — the one mode
-measured to cost more than it saves. Turn either hook off individually with
-`FREELOADER_INTERCEPT=0` or `FREELOADER_CAP=0`.
+`intercept-hook.sh` is registered but **inert unless `FREELOADER_INTERCEPT=1`**
+— it is wired up so the opt-in is one variable, not a reinstall. So a default
+install gives you `cap` (the mode that pays) and conserve mode, and nothing
+answers a prompt on your behalf. `--no-hook` skips all three, leaving only
+hand-routing from inside a Claude turn — the one mode measured to cost more than
+it saves. Disable the cap with `FREELOADER_CAP=0`.
 
 ## What it saved
 

@@ -148,11 +148,13 @@ tokens on every 5th call — the other four read a cached value.
 
 Neither needs anything from you; both are installed by `scripts/install.sh`.
 
-**`hooks/intercept-hook.sh`** (`UserPromptSubmit`) — answers a trivially
-self-contained prompt from a free model and blocks the turn, so the whole turn
-is saved rather than a few output tokens. `scripts/triage.sh` decides, and is
-extremely strict: anything with a pronoun, a path, a task verb, a paste, or the
-word "claude" goes to you instead. When it fires, you never see the prompt.
+**`hooks/intercept-hook.sh`** (`UserPromptSubmit`) — **disabled by default; you
+will not normally see this fire.** It answers a trivially self-contained prompt
+before your turn exists. Shadow-tested over 7,311 real prompts it fired on 0.47%
+and was wrong on most of those — "what are the themes?" looks exactly like "what
+is the capital of Portugal?" to a regex — so it ships off. If a user asks about
+it, that is the answer; don't suggest enabling it without a triage that decides
+on meaning rather than shape.
 
 **`hooks/cap-hook.sh`** (`PreToolUse`) — rewrites known-verbose Bash commands
 (test runners, builds) to pipe through `scripts/cap.sh`, which replaces a huge

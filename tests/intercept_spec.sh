@@ -22,6 +22,10 @@ intercept() {
     export FREELOADER_USAGE_LOG="$STUB_BIN/usage.jsonl"
     export FREELOADER_STATE="$STUB_BIN/state.json"
     printf 'x%.0s' $(seq 1 4000) > "$STUB_BIN/transcript.jsonl"
+    # The hook ships disabled (see its header — shadow testing found its triage
+    # unfixable). These specs cover the mechanism, so they opt in explicitly;
+    # the "when switched off" example below overrides this back.
+    export FREELOADER_INTERCEPT=1
     for kv in "$@"; do export "${kv?}"; done
     payload=$(jq -cn --arg p "$prompt" --arg t "$STUB_BIN/transcript.jsonl" \
       '{user_prompt:$p, transcript_path:$t}')
@@ -116,6 +120,21 @@ describe "intercept-hook.sh — failing open"
       r=$(intercept "what is the capital of Portugal" ok FREELOADER_INTERCEPT=0)
       expect_status "$(part "$r" 2)" "0"
       expect_eq "$(part "$r" 1)" ""'
+
+  # It ships disabled. An install that silently started answering prompts from
+  # a free model would be the single worst regression this project could have.
+  context "by default, with nothing set"
+
+    it "stays out of the way entirely" '
+      out=$(
+        with_stub_path
+        stub_opencode
+        unset FREELOADER_INTERCEPT
+        printf "{\"user_prompt\":\"what is the capital of Portugal\"}" \
+          | "$PROJECT_DIR/hooks/intercept-hook.sh" 2>/dev/null
+      ); status=$?
+      expect_status "$status" "0"
+      expect_eq "$out" "" "expected the hook to be off unless opted into"'
 
   context "with unusable input"
 

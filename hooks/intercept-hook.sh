@@ -25,7 +25,25 @@
 # ("claude, ...") — triage.sh refuses anything addressed to Claude by name.
 set -uo pipefail
 
-[ "${FREELOADER_INTERCEPT:-1}" = "0" ] && exit 0
+# OFF BY DEFAULT — opt in with FREELOADER_INTERCEPT=1.
+#
+# Shadow-tested against 7,311 real prompts from ~/.claude/projects: it would
+# have fired on 34 (0.47%), and hand-checking a sample of 12 of those found
+# 1 that was actually safe. The rest were questions whose subject lived in the
+# conversation — "what are the themes?", "whats next?", "where is MInc salic
+# data?" — which a model that has never seen the repo answers fluently and
+# wrongly, with no Claude turn left to catch it.
+#
+# The premise does not survive: "what are the themes?" and "what is the capital
+# of Portugal?" are syntactically identical. What separates them is whether the
+# referent is in the conversation, which is semantic, and no amount of regex in
+# triage.sh can decide it. Total value at 100% precision would still have been
+# $0.22-$0.83 across that entire history.
+#
+# Kept, disabled, because the measurement is the point: the mechanism works
+# (see intercept_spec.sh), the triage cannot. Re-enable only with a triage that
+# decides on meaning rather than shape.
+[ "${FREELOADER_INTERCEPT:-0}" = "1" ] || exit 0
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
