@@ -22,13 +22,19 @@ LINK="$SKILLS_DIR/freeloader"
 SETTINGS="$CLAUDE_DIR/settings.json"
 HOOK_CMD="$SKILL_DIR/hooks/tick-hook.sh"
 
-# Every hook this project installs, as "<event> <script>". The two added after
-# tick-hook are the ones that make routing pay for itself: answering a trivial
-# prompt without starting a Claude turn, and keeping a huge command output from
-# entering the conversation at all. See README.
+# Every hook this project installs, as "<event> <script>".
+#
+# There used to be a third, a PreToolUse hook that wrapped verbose Bash
+# commands in scripts/cap.sh. It was removed: rtk (github.com/rtk) already
+# occupies that exact slot as a PreToolUse rewriter, covers 20+ commands
+# including `rtk test` and `rtk err`, and has saved two orders of magnitude
+# more than freeloader's cap could have. Two hooks rewriting the same command
+# is undefined behaviour, so this one stepped aside. See README.
+#
+# intercept-hook is registered but inert unless FREELOADER_INTERCEPT=1 — see
+# its header for the shadow test that disabled it.
 HOOKS="UserPromptSubmit $SKILL_DIR/hooks/tick-hook.sh
-UserPromptSubmit $SKILL_DIR/hooks/intercept-hook.sh
-PreToolUse $SKILL_DIR/hooks/cap-hook.sh"
+UserPromptSubmit $SKILL_DIR/hooks/intercept-hook.sh"
 
 DRY_RUN=false
 WITH_HOOK=true

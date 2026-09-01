@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Specs for scripts/cap.sh and hooks/cap-hook.sh — keeping a large command
-# output out of the conversation.
+# Specs for scripts/cap.sh — compressing a large command output.
+#
+# The PreToolUse hook that used to call this automatically was deleted (rtk
+# owns that slot; see the script header), so cap.sh is now a manual filter for
+# the long tail rtk does not proxy. These specs cover the filter itself.
 #
 # The failure that matters here is not "saved fewer tokens than it could have".
 # It is destroying the one line someone needed, or masking a non-zero exit so a
@@ -136,54 +139,5 @@ describe "cap.sh — ledger"
       r=$(cap "$(big_output 800)")
       n=$(printf "%s" "$(part "$r" 2)" | grep -c . || true)
       expect_eq "$n" "1"'
-
-describe "cap-hook.sh — which commands get wrapped"
-
-  hook() { # <command> — the rewritten command, or empty
-    printf '{"tool_name":"Bash","tool_input":{"command":%s}}' "$(jq -Rn --arg c "$1" '$c')" \
-      | "$PROJECT_DIR/hooks/cap-hook.sh" 2>/dev/null \
-      | jq -r '.hookSpecificOutput.updatedInput.command // ""' 2>/dev/null
-  }
-
-  context "with a command known to be verbose"
-
-    it "pipes it through the cap" '
-      expect_contains "$(hook "npm test")" "cap.sh"
-      expect_contains "$(hook "pytest -q")" "cap.sh"
-      expect_contains "$(hook "cargo build --release")" "cap.sh"'
-
-    # Without pipefail the pipeline reports the cap exit status, and a failing
-    # test suite silently reads as passing — far worse than saving nothing.
-    it "preserves the exit status with pipefail" '
-      expect_contains "$(hook "npm test")" "set -o pipefail"'
-
-  context "with anything else"
-
-    it "leaves quiet commands alone" '
-      expect_eq "$(hook "git status")" ""
-      expect_eq "$(hook "ls -la")" ""
-      expect_eq "$(hook "go version")" ""'
-
-    # Wrapping a command that already has a pipe or a redirect would change
-    # what it means, and no token saving justifies that.
-    it "leaves anything already piped or redirected alone" '
-      expect_eq "$(hook "npm test | head -20")" ""
-      expect_eq "$(hook "npm test > out.txt")" ""
-      expect_eq "$(hook "npm test && echo done")" ""'
-
-    it "does not wrap a command twice" '
-      expect_eq "$(hook "npm test 2>&1 | /x/cap.sh")" ""'
-
-    it "ignores non-Bash tools" '
-      out=$(printf "%s" "{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"/x\"}}" \
-        | "$PROJECT_DIR/hooks/cap-hook.sh" 2>/dev/null)
-      expect_eq "$out" ""'
-
-  context "when disabled"
-
-    it "does nothing at all" '
-      out=$(printf "%s" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"npm test\"}}" \
-        | FREELOADER_CAP=0 "$PROJECT_DIR/hooks/cap-hook.sh" 2>/dev/null)
-      expect_eq "$out" ""'
 
 spec_summary

@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 # Keeps a large command output from entering the conversation whole.
 #
-# This is where the tokens actually are. A trivia lookup routed to a free model
-# saves a few dozen output tokens; a 40k-token test log costs that much on the
-# turn it arrives and then gets re-read on *every* following turn for the rest
-# of the session. Compressing one of those is worth thousands of routed
-# lookups, which is why this exists despite being the least glamorous script
-# here.
+# MANUAL ONLY. This used to be wired to a PreToolUse hook that wrapped verbose
+# Bash commands automatically. That hook was deleted: `rtk` already sits in
+# exactly that slot, proxies 20+ commands (including `rtk test`, which shows
+# only failures, and `rtk err`), and has saved ~504M tokens against the ~2M
+# ceiling measured for this. Two PreToolUse hooks rewriting the same command is
+# undefined behaviour, and the better-measured one should win.
+#
+# What is left for this script is the long tail rtk does not proxy — an ad-hoc
+# pipeline, a one-off script, an ssh command — where you want the head, the
+# failure lines and the tail instead of 40k tokens. Pipe to it deliberately:
 #
 # Usage:  <command> 2>&1 | cap.sh
 #         cap.sh < big-file

@@ -23,7 +23,7 @@ budget. `integration_spec.sh` is the exception and is skipped unless
 | `scan_spec.sh` | what must never be sent, and what must still route |
 | `triage_spec.sh` | what can be answered with no conversation context — mostly what cannot |
 | `intercept_spec.sh` | answering before the Claude turn exists, and failing open in every other case |
-| `cap_spec.sh` | compressing large tool output without losing the failure or the exit status |
+| `cap_spec.sh` | `cap.sh` compressing a large output without losing the failure lines or the exit status |
 | `tick_spec.sh` | conserve-mode counter, its cached state, and degradation |
 | `usage_spec.sh` | rate-limit reporting, and that no credential ever reaches stdout/stderr |
 | `stats_spec.sh` | the savings arithmetic over the usage log |

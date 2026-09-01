@@ -16,10 +16,11 @@ the conversation; routing adds one more request that re-sends all of it, to save
 the handful of tokens you would have spent on the answer. Measured, that is
 negative for any conversation over a few hundred tokens — see the README.
 
-The modes that actually save are mechanical and need nothing from you:
-`hooks/intercept-hook.sh` answers a trivial prompt before your turn exists, and
-`hooks/cap-hook.sh` keeps huge command output out of the conversation. Both run
-without your involvement, which is the point.
+Measuring the alternatives removed them too: the prompt intercept ships disabled
+(it guessed wrong on real prompts) and the Bash output cap was deleted (`rtk`
+already does that job, far better). See the README's "Where this honestly
+stands" — and do not tell a user this skill is saving them money without
+checking `scripts/stats.sh` first.
 
 So: **prefer not routing by hand.** Do it when the user explicitly asks, and
 otherwise only for a prompt whose answer would be long (the saving scales with
@@ -144,9 +145,11 @@ with `scripts/tick.sh`, which prints
 `{"conserve_mode": bool, "turns_since_check": int, ...}`. It only spends real
 tokens on every 5th call — the other four read a cached value.
 
-## The two hooks that do the real work
+## The hooks
 
-Neither needs anything from you; both are installed by `scripts/install.sh`.
+Installed by `scripts/install.sh`. Neither needs anything from you — and after
+three rounds of measurement, neither is doing much either. Read the README's
+"Where this honestly stands" before telling a user this skill saves them money.
 
 **`hooks/intercept-hook.sh`** (`UserPromptSubmit`) — **disabled by default; you
 will not normally see this fire.** It answers a trivially self-contained prompt
@@ -156,11 +159,17 @@ is the capital of Portugal?" to a regex — so it ships off. If a user asks abou
 it, that is the answer; don't suggest enabling it without a triage that decides
 on meaning rather than shape.
 
-**`hooks/cap-hook.sh`** (`PreToolUse`) — rewrites known-verbose Bash commands
-(test runners, builds) to pipe through `scripts/cap.sh`, which replaces a huge
-output with its head, its failure lines, a free-model summary, and its tail.
-This is the single biggest saving in the project, because a large tool result is
-re-read on every subsequent turn, not just the one it arrived on.
+**`scripts/cap.sh`** — manual. Pipe an oversized output to it and it returns the
+head, every line matching a failure pattern, a free-model summary, and the tail:
+
+```
+some-ad-hoc-pipeline 2>&1 | scripts/cap.sh
+```
+
+There used to be a `PreToolUse` hook doing this automatically. It was deleted:
+`rtk` already sits in that slot and does the job better (`rtk test`, `rtk err`,
+20+ proxies). **If `rtk` is on PATH, prefer it and don't reach for `cap.sh`** —
+it is for the long tail `rtk` doesn't proxy.
 
 When you see `[freeloader] output capped`, the full output is on disk at the
 path printed right below it — read that file if the summary is not enough.

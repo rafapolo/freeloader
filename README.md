@@ -2,6 +2,30 @@
 
 Routes cheap, low-stakes prompts from Claude Code to a free-tier model via the `opencode` CLI, and reads the answer back — so trivial requests cost $0 instead of Claude tokens.
 
+## Where this honestly stands
+
+Three rounds of measuring this project's own premise removed most of it. What
+survived is worth stating plainly, because the headline above oversells it:
+
+- **Routing from inside a Claude turn loses money.** Measured, not estimated.
+  It is still available; it is no longer the recommended path.
+- **The prompt intercept is disabled.** It fired on 0.47% of real prompts and
+  was wrong on most of those.
+- **The Bash output cap is deleted.** [`rtk`](https://github.com/rafapolo/rtk)
+  already occupies that slot and has saved ~250× more.
+
+What is left that earns its place: a **two-sided ledger** (`stats.sh`) that
+reports cost next to saving and is allowed to print a negative net; a
+**pre-send scan** that refuses to hand credentials or personal data to a free
+endpoint; a **tool-less sandbox** for anything that is routed; and
+**`shadow-analysis.sh`**, which is how two of the three findings above were
+found. The routing still works and is still free — it is just no longer claimed
+to be a saving where it is not.
+
+If you want the large, real, already-working version of "spend fewer tokens on
+tool output", install `rtk`. This project's remaining contribution is the
+accounting that tells you whether something like it is working.
+
 ## The uncomfortable finding
 
 The first version of this project measured itself and reported success. Then it
@@ -85,6 +109,45 @@ compresses output that has already been produced, so being wrong costs
 fidelity, not correctness. `hook` had to predict whether a question was
 answerable before anyone had looked at it — and that prediction is the whole
 problem.
+
+### The third finding: `rtk` already did the good part
+
+Asked what to build next, the answer was to widen `cap`'s trigger — its
+allowlist of "verbose" commands was hand-written, and measured against history
+it caught **15.6%** of the tokens it was written to catch (190k covered, 1.03M
+missed). The real top producers were `cd`, `ssh`, `sed`, `grep`, `cat`, `git` —
+not `npm`/`pytest`/`cargo`. A guessed list, wrong for the third time.
+
+The right response was not a better list. [`rtk`](https://github.com/rafapolo/rtk)
+was already installed on the same machine, in the same `PreToolUse` slot,
+proxying 20+ commands — including `rtk test` ("show only failures") and
+`rtk err`, which is precisely `cap.sh`'s job:
+
+| | scope | tokens saved |
+|---|---|---|
+| `rtk` | 20+ command proxies | **504,200,000** |
+| freeloader's Bash cap | generic head/tail/summary | ~2,000,000 ceiling |
+
+Two `PreToolUse` hooks rewriting the same command is undefined behaviour — they
+did not collide only because `rtk` happens to be selective about subcommands.
+So the hook was deleted and `cap.sh` demoted to a manual filter. The measured
+"2M ceiling" was itself residual: it was computed from transcripts `rtk` had
+*already* compressed.
+
+**What is left uncovered** is the native tools — `rtk` rewrites Bash commands
+and does not touch `Read`, `Grep` or `Glob`. That matters, because of the 826
+oversized tool results in history, the weight is an almost exact 50/50 split:
+
+| tool | oversized results | tokens | share of all tool tokens |
+|---|---|---|---|
+| `Read` | 308 | 1,220,841 | 17.8% |
+| `Bash` | 457 | 1,221,748 | 17.8% |
+| everything else | 61 | ~208,000 | 3.0% |
+
+308 `Read` calls — 1.4% of all tool calls — carry as many tokens as 457 Bash
+ones. It is deliberately **not** built: capping `Read` means guessing how much
+of a file is needed before anything has looked at it, which is the same bet that
+failed in the triage and again in the allowlist.
 
 ## How it works
 
@@ -188,7 +251,7 @@ that reason.
 |---|---|---|---|
 | `turn` | Claude, mid-conversation | the tokens Claude would have spent answering | one extra request re-sending the whole conversation |
 | `hook` | `intercept-hook.sh`, before the turn exists | the entire turn — context read plus output | nothing |
-| `cap` | `cap-hook.sh`, around a noisy command | the tokens that never entered context, on this turn and every later one | nothing |
+| `cap` | `cap.sh`, piped around a noisy command by hand | the tokens that never entered context, on this turn and every later one | nothing |
 
 **Intercepting** (`hooks/intercept-hook.sh`, `UserPromptSubmit`) — **off by
 default**, see the finding above. It answers a trivially self-contained prompt
@@ -202,25 +265,19 @@ wrong on most of what it let through. The mechanism itself is sound and tested
 an unloaded sandbox, labels every answer, and treats a leading `claude,` as an
 override — but the triage in front of it is not, so it stays disabled.
 
-**Capping** (`hooks/cap-hook.sh`, `PreToolUse` → `scripts/cap.sh`) — the biggest
-saving here, and the least glamorous. A 40k-token test log costs input tokens on
-the turn it arrives and then gets re-read on *every* following turn; compressing
-one is worth thousands of routed lookups. Known-verbose commands (test runners,
-builders) are rewritten to pipe through `cap.sh`, which under the threshold is a
-byte-exact pass-through and over it emits the head, every line matching a
-failure pattern, a free-model summary, and the tail.
+**Capping** (`scripts/cap.sh`) — **manual now; the hook was deleted.** See the
+third finding below. It replaces a large output with its head, every line
+matching a failure pattern, a free-model summary and its tail; under the
+threshold it is a byte-exact pass-through. The full output is always written to
+disk and its path printed, so nothing is ever *only* summarized. The summary
+excerpt is head + failure lines + tail rather than the first N bytes, because a
+plain head truncation gets a build that fails on its last line summarized as
+"no failures were detected" — printed directly above the error that disproves
+it. Pipe to it deliberately for the long tail `rtk` does not proxy:
 
-It has to be `PreToolUse`: `PostToolUse` fires after the tool has run and
-[cannot modify the result](https://code.claude.com/docs/en/hooks) — by then the
-log is already in the conversation and the money is spent. Three rules keep the
-rewrite honest: only allowlisted verbose commands; nothing containing a pipe,
-redirect, subshell or separator (wrapping those changes their meaning); and
-`set -o pipefail`, so a failing test suite still reads as failed. The full
-output is always written to disk and its path printed — nothing is ever only
-summarized. The summary excerpt is head + failure lines + tail rather than the
-first N bytes, because a plain head truncation gets a build that fails on its
-last line summarized as "no failures were detected", printed directly above the
-error that disproves it.
+```
+some-ad-hoc-pipeline 2>&1 | scripts/cap.sh
+```
 
 **Conserve mode** — `hooks/tick-hook.sh` runs as a `UserPromptSubmit` hook. It
 is silent in the normal case; 4 of every 5 calls just read a local cache (free),
@@ -240,25 +297,23 @@ stdout.
 ## Install
 
 ```
-scripts/install.sh              # symlink the skill + register three hooks
+scripts/install.sh              # symlink the skill + register two hooks
 scripts/install.sh --dry-run    # show what it would do first
 scripts/install.sh --no-hook    # skill only, no hooks
 scripts/install.sh --uninstall
 ```
 
 Until the skill is symlinked into `~/.claude/skills/`, Claude's Skill tool
-cannot see it and none of this ever runs. Three hooks are registered:
-`tick-hook.sh` and `intercept-hook.sh` on `UserPromptSubmit`, `cap-hook.sh` on
-`PreToolUse`. The installer is idempotent, backs up `~/.claude/settings.json`
+cannot see it and none of this ever runs. Two hooks are registered, both on
+`UserPromptSubmit`: `tick-hook.sh` and `intercept-hook.sh`. The installer is idempotent, backs up `~/.claude/settings.json`
 before merging, preserves hooks already there, and removes only its own on
 `--uninstall`. Restart Claude Code afterwards.
 
 `intercept-hook.sh` is registered but **inert unless `FREELOADER_INTERCEPT=1`**
-— it is wired up so the opt-in is one variable, not a reinstall. So a default
-install gives you `cap` (the mode that pays) and conserve mode, and nothing
-answers a prompt on your behalf. `--no-hook` skips all three, leaving only
-hand-routing from inside a Claude turn — the one mode measured to cost more than
-it saves. Disable the cap with `FREELOADER_CAP=0`.
+— wired up so the opt-in is one variable, not a reinstall. A default install
+therefore gives you conserve mode and nothing else automatic: nothing answers a
+prompt on your behalf, and nothing rewrites a command (`rtk` does that, and does
+it better). `--no-hook` skips both.
 
 ## What it saved
 
