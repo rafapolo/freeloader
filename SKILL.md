@@ -35,7 +35,10 @@ Do NOT route when the request:
 - involves sensitive, private, or proprietary content — the sandbox stops the
   model going and *fetching* anything, but whatever you put in the prompt still
   goes to a third-party API. Never paste secrets, credentials, or private user
-  data into a routed prompt.
+  data into a routed prompt — that includes personal info (names, emails,
+  addresses, phone numbers, account/financial details) about the user or
+  anyone else. If a prompt can't be scrubbed of it while staying useful, keep
+  it with Claude instead of routing.
 - is one the user is clearly asking Claude specifically to handle
 
 If genuinely unsure, don't route — just answer normally. Never route silently
