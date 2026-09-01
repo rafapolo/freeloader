@@ -1,14 +1,19 @@
 ---
 name: freeloader
-description: Route cheap, low-stakes prompts to opencode's free-tier models instead of answering with Claude directly, to save Claude tokens. Use when the user says "freeloader", "use the free model", "route this to opencode", "save tokens", or "use a free model for this" — or proactively for a request that is clearly cheap (a short factual lookup, a unit/format conversion, a one-line rewrite/translation, boilerplate with no repo context, a trivial snippet) and does not need repo context, tool calls, file edits, or judgment. Not for anything requiring codebase context, multi-step reasoning, file edits, tool use, or where correctness matters a lot — those stay with Claude. Requires the `opencode` CLI and `jq` on PATH.
+description: ARCHIVED EXPERIMENT — routes a prompt to an opencode free-tier model. Measured and found to LOSE money in normal use, so do not invoke it to save tokens and never tell a user it saves them anything. Use only when the user explicitly names "freeloader" or asks to route a specific prompt to a free model, and say plainly that it is an archived experiment whose own measurements are in the README. The things that actually reduce token use are /clear between tasks, right-sizing the model, delegating verbose work to subagents, and rtk for tool output.
 ---
 
-# Freeloader
+# Freeloader — archived experiment
 
-Offload cheap prompts to whichever of opencode's free models is fastest and
-actually working, instead of spending Claude tokens on them. Everything runs
-through the `opencode` CLI, which must already be installed and authenticated
-(`opencode providers list` should show at least one provider).
+**Do not use this to save tokens. It was measured and it does not.** The repo is
+archived as a negative result; the README holds the numbers.
+
+If a user invokes it anyway, it still works: it routes a prompt to whichever of
+opencode's free models is fastest and actually working, sandboxed and tool-less.
+But say plainly that it is an archived experiment, and if they want lower token
+use, point them at `/clear` between tasks, a smaller model, subagents for verbose
+operations, and `rtk` for tool output — all of which are measured to work, unlike
+this.
 
 **Read this before routing anything.** Calling `route.sh` yourself, mid-turn, is
 the *worst* way to use this skill and usually loses money. You have already read

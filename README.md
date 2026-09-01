@@ -1,30 +1,51 @@
 <p align="center"><img src="assets/logo.png" alt="freeloader" width="320"></p>
 
-Routes cheap, low-stakes prompts from Claude Code to a free-tier model via the `opencode` CLI, and reads the answer back — so trivial requests cost $0 instead of Claude tokens.
+**Archived — a negative result.** This began as a skill that routed cheap prompts
+from Claude Code to free-tier models to save tokens. Measuring it properly, three
+times, dismantled it. The measurements are the reason the repo is still here; the
+tool is not worth installing.
 
-## Where this honestly stands
+## Don't install this
 
-Three rounds of measuring this project's own premise removed most of it. What
-survived is worth stating plainly, because the headline above oversells it:
+Every mechanism it shipped was measured and then withdrawn:
 
-- **Routing from inside a Claude turn loses money.** Measured, not estimated.
-  It is still available; it is no longer the recommended path.
-- **The prompt intercept is disabled.** It fired on 0.47% of real prompts and
-  was wrong on most of those.
-- **The Bash output cap is deleted.** [`rtk`](https://github.com/rafapolo/rtk)
-  already occupies that slot and has saved ~250× more.
+| mechanism | verdict |
+|---|---|
+| routing a prompt mid-turn | **loses money** — the extra request re-sends the whole conversation to save ~13 tokens |
+| answering prompts before the turn (intercept) | **disabled** — fired on 0.47% of real prompts, wrong on ~11 of 12 |
+| capping verbose Bash output | **deleted** — a worked example in [the Claude Code docs](https://code.claude.com/docs/en/costs#offload-processing-to-hooks), and [`rtk`](https://github.com/rafapolo/rtk) does it ~250× better |
+| conserve mode / usage reporting | **superseded** — `/usage` reports plan limits, attribution and behavior flags natively |
 
-What is left that earns its place: a **two-sided ledger** (`stats.sh`) that
-reports cost next to saving and is allowed to print a negative net; a
-**pre-send scan** that refuses to hand credentials or personal data to a free
-endpoint; a **tool-less sandbox** for anything that is routed; and
-**`shadow-analysis.sh`**, which is how two of the three findings above were
-found. The routing still works and is still free — it is just no longer claimed
-to be a saving where it is not.
+**If you came here to spend fewer tokens, the things that actually work are:**
+`/clear` between unrelated tasks, right-sizing the model, delegating verbose
+operations to subagents, moving CLAUDE.md bulk into skills ([all documented
+here](https://code.claude.com/docs/en/costs#reduce-token-usage)) — and
+[`rtk`](https://github.com/rafapolo/rtk) for tool output.
 
-If you want the large, real, already-working version of "spend fewer tokens on
-tool output", install `rtk`. This project's remaining contribution is the
-accounting that tells you whether something like it is working.
+## What's actually worth reading
+
+The three findings below, and the two things that produced them:
+
+- **[`scripts/shadow-analysis.sh`](scripts/shadow-analysis.sh)** — replays a
+  heuristic over your own `~/.claude/projects` history and reports what it
+  *would* have done. Local, no model calls, nothing into a context window. It
+  killed two of the three features here.
+- **[`scripts/stats.sh`](scripts/stats.sh)** — a two-sided ledger. It reports
+  what routing cost next to what it saved and is allowed to print a negative
+  net. Every tool in this space (including `rtk gain`'s "97% saved", and
+  `/usage`) reports one side.
+
+The safety layer also still holds up if you route to third-party models at all:
+a **[pre-send scan](scripts/scan.sh)** that refuses to hand credentials or
+personal data to a free endpoint, and a **[tool-less sandbox](agent/freeloader.json)**
+so a free model can't read your repo on its own initiative.
+
+## The pattern, in one line
+
+Three features, three identical failures: each one was a **hand-written list of
+what "looks cheap" or "looks verbose"**, and each was wrong in a way that only
+showed up when replayed against real history — never by reasoning about it, and
+never at the moment of writing the code.
 
 ## The uncomfortable finding
 
