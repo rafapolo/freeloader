@@ -208,10 +208,74 @@ freeloader_price_model() { printf '%s' "${FREELOADER_PRICE_MODEL:-claude-sonnet-
 freeloader_price_in()    { printf '%s' "${FREELOADER_PRICE_IN:-2.00}"; }
 freeloader_price_out()   { printf '%s' "${FREELOADER_PRICE_OUT:-10.00}"; }
 
+# Re-reading an already-cached conversation costs 0.1x the input rate. This is
+# the rate that decides whether routing is worth anything at all: every route
+# made from inside a Claude turn adds one more request that re-sends the whole
+# conversation at this price, whether the free model answers well or not.
+freeloader_price_cache_read() {
+  if [ -n "${FREELOADER_PRICE_CACHE_READ:-}" ]; then
+    printf '%s' "$FREELOADER_PRICE_CACHE_READ"
+  else
+    awk -v p="$(freeloader_price_in)" 'BEGIN { printf "%.4f", p * 0.1 }'
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# conversation size
+# ---------------------------------------------------------------------------
+
+FREELOADER_STATE_DEFAULT="$HOME/.cache/freeloader-state.json"
+freeloader_state_file() { printf '%s' "${FREELOADER_STATE:-$FREELOADER_STATE_DEFAULT}"; }
+
+# freeloader_record_context <transcript_path>
+#
+# Hooks are handed the session transcript; route.sh is not. Without this number
+# the cost side of a route is unmeasurable, and the project can only report its
+# own upside. Stashed in the state file so route.sh can read it later.
+#
+# bytes/4 over the whole transcript is a proxy, and an over-estimate: it counts
+# JSONL scaffolding, and a compacted conversation sends less than the transcript
+# holds. Erring high is the honest direction here — it inflates the *cost* of
+# routing, so the numbers never flatter the premise.
+freeloader_record_context() {
+  local transcript="$1" state bytes tokens prior tmp
+  [ -f "$transcript" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  state="$(freeloader_state_file)"
+  bytes=$(wc -c < "$transcript" 2>/dev/null | tr -d ' ') || return 0
+  [ -n "$bytes" ] || return 0
+  tokens=$(( bytes / 4 ))
+
+  mkdir -p "$(dirname "$state")" 2>/dev/null || return 0
+  if [ -f "$state" ] && jq -e . "$state" >/dev/null 2>&1; then
+    prior=$(cat "$state")
+  else
+    prior='{}'
+  fi
+  tmp="${state}.tmp.$$"
+  printf '%s' "$prior" | jq --argjson t "$tokens" '.context_tokens = $t' > "$tmp" 2>/dev/null \
+    && mv "$tmp" "$state" \
+    || rm -f "$tmp"
+}
+
+# The last recorded conversation size, or 0 when no hook has run yet (in which
+# case cost simply reads as 0 rather than as a guess).
+freeloader_context_tokens() {
+  local state; state="$(freeloader_state_file)"
+  if [ -f "$state" ]; then
+    jq -r '.context_tokens // 0' "$state" 2>/dev/null || printf '0'
+  else
+    printf '0'
+  fi
+}
+
 # freeloader_log_route <json-object>
 # Appends one record to the usage log. Best-effort: a failure here must never
 # take down a route that otherwise succeeded.
 freeloader_log_route() {
+  # cap.sh calls route.sh as a sub-step and then writes one accurate record of
+  # its own; without this the same work would appear on the ledger twice.
+  [ "${FREELOADER_NO_LOG:-}" = "1" ] && return 0
   local log="${FREELOADER_USAGE_LOG:-$FREELOADER_USAGE_LOG_DEFAULT}"
   mkdir -p "$(dirname "$log")" 2>/dev/null || return 0
   printf '%s\n' "$1" >> "$log" 2>/dev/null || true

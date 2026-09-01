@@ -2,13 +2,61 @@
 
 Routes cheap, low-stakes prompts from Claude Code to a free-tier model via the `opencode` CLI, and reads the answer back — so trivial requests cost $0 instead of Claude tokens.
 
+## The uncomfortable finding
+
+The first version of this project measured itself and reported success. Then it
+was asked to measure the other side of the ledger:
+
+```
+routed 2 of 4 prompts
+saved ~26 Claude tokens ≈ $0.0001   ← 13 tokens per route
+SKILL.md                 ≈ 2,838 tokens to load
+```
+
+**Routing a prompt from inside a Claude turn cannot save money.** Three reasons,
+which compound:
+
+1. **A route adds a whole extra request.** Calling `route.sh` ends Claude's turn;
+   the reply comes back in a new request that re-sends the entire conversation.
+   At cache-read rates ($0.20/MTok) a 30k-token conversation costs $0.006 — to
+   save $0.0001.
+2. **Relaying an answer costs about the same output tokens as writing it.**
+   Output is the expensive side ($10/MTok). Claude emits "Lisbon" either way.
+   The only real saving is the reasoning avoided, which for trivia is ~13 tokens
+   — exactly what the log measured.
+3. **A failed route is pure loss.** Half the prompts fell back after 20-60s of
+   timeouts, and Claude answered anyway: full cost, zero saving.
+
+Measured break-even: **a conversation of ~900 tokens.** Real Claude Code sessions
+run 30k-350k. The premise was never viable in the mode the project shipped in.
+
+### What fixed it
+
+Not a better router — a different call site. Same free model, same scripts,
+measured live across all three modes with a conservative 30k-token context:
+
+| mode | where the call happens | net per route |
+|---|---|---|
+| `turn` | Claude calls `route.sh` mid-conversation | **-$0.0060** |
+| `hook` | answered before the Claude turn exists | **+$0.0060** |
+| `cap` | a noisy command's output, compressed on the way in | **+$0.0052** ¹ |
+
+¹ on a 13.7 KB test log (→ 3.9 KB). Real build output runs 10-50× that, and a
+large tool result is re-read on *every* later turn, not just the one it arrives
+on — so this is the mode with the most headroom, by a wide margin.
+
+The sign flips purely on *where* the route is made. That is why the two hooks
+below exist, why they need nothing from the model, and why `stats.sh` now
+reports a `net` column that is allowed to be negative.
+
 ## How it works
 
 A lookup like "capital of Portugal?" doesn't need repo context, tool calls, or
 judgment — it just needs *an* answer. [`opencode`](https://opencode.ai) gives
-access to several $0 models. This skill has Claude notice when a request is
-that cheap, hand it off, and relay the reply back — labeled, so you always
-know a free model answered, not Claude. See `SKILL.md` for the exact
+access to several $0 models. This skill spots requests that cheap, hands them
+off, and relays the reply back — labeled, so you always know a free model
+answered, not Claude. Per the finding above, the spotting is done by hooks
+wherever possible rather than by Claude mid-turn. See `SKILL.md` for the exact
 cheap-vs-not criteria (anything needing repo context, edits, tool calls,
 multi-step judgment, or sensitive data always stays with Claude).
 
@@ -94,6 +142,50 @@ It catches structured data, not prose — it cannot recognise a name or a privat
 situation described in a sentence, so the judgment rule in `SKILL.md` still
 carries the rest.
 
+**Where the route is called from decides everything.** The same prompt, the same
+free model, the same answer, is worth wildly different amounts depending on
+which of three modes it happens in — and `stats.sh` reports them separately for
+that reason.
+
+| mode | called from | saves | costs |
+|---|---|---|---|
+| `turn` | Claude, mid-conversation | the tokens Claude would have spent answering | one extra request re-sending the whole conversation |
+| `hook` | `intercept-hook.sh`, before the turn exists | the entire turn — context read plus output | nothing |
+| `cap` | `cap-hook.sh`, around a noisy command | the tokens that never entered context, on this turn and every later one | nothing |
+
+**Intercepting** (`hooks/intercept-hook.sh`, `UserPromptSubmit`) — answers a
+trivially self-contained prompt from a free model and denies the prompt, so no
+Claude turn happens at all. `scripts/triage.sh` decides, through four
+independent gates: short and single-line, no word pointing outside the prompt
+(pronouns, possessives, paths, task verbs, "claude"), a positive match against a
+small allowlist of question shapes, and scan-clean. The asymmetry justifies the
+strictness — a false negative costs nothing, while a false positive means a
+model that has never seen your repo answers a question about it, with the turn
+that would have caught the mistake never running. It fails open everywhere: no
+`jq`, no free model, a slow model, an empty reply, an unloaded sandbox — all of
+it just lets the prompt through. The answer is labelled, and prefixing any
+prompt with `claude,` forces a normal turn.
+
+**Capping** (`hooks/cap-hook.sh`, `PreToolUse` → `scripts/cap.sh`) — the biggest
+saving here, and the least glamorous. A 40k-token test log costs input tokens on
+the turn it arrives and then gets re-read on *every* following turn; compressing
+one is worth thousands of routed lookups. Known-verbose commands (test runners,
+builders) are rewritten to pipe through `cap.sh`, which under the threshold is a
+byte-exact pass-through and over it emits the head, every line matching a
+failure pattern, a free-model summary, and the tail.
+
+It has to be `PreToolUse`: `PostToolUse` fires after the tool has run and
+[cannot modify the result](https://code.claude.com/docs/en/hooks) — by then the
+log is already in the conversation and the money is spent. Three rules keep the
+rewrite honest: only allowlisted verbose commands; nothing containing a pipe,
+redirect, subshell or separator (wrapping those changes their meaning); and
+`set -o pipefail`, so a failing test suite still reads as failed. The full
+output is always written to disk and its path printed — nothing is ever only
+summarized. The summary excerpt is head + failure lines + tail rather than the
+first N bytes, because a plain head truncation gets a build that fails on its
+last line summarized as "no failures were detected", printed directly above the
+error that disproves it.
+
 **Conserve mode** — `hooks/tick-hook.sh` runs as a `UserPromptSubmit` hook. It
 is silent in the normal case; 4 of every 5 calls just read a local cache (free),
 and every 5th shells out to `scripts/usage.sh --json` for your real Claude 5h/7d
@@ -112,15 +204,22 @@ stdout.
 ## Install
 
 ```
-scripts/install.sh              # symlink the skill + register the hook
+scripts/install.sh              # symlink the skill + register three hooks
 scripts/install.sh --dry-run    # show what it would do first
+scripts/install.sh --no-hook    # skill only, no hooks
 scripts/install.sh --uninstall
 ```
 
 Until the skill is symlinked into `~/.claude/skills/`, Claude's Skill tool
-cannot see it and none of this ever runs. The installer backs up
-`~/.claude/settings.json` before merging the hook into it, and preserves any
-hooks already there. Restart Claude Code afterwards.
+cannot see it and none of this ever runs. Three hooks are registered:
+`tick-hook.sh` and `intercept-hook.sh` on `UserPromptSubmit`, `cap-hook.sh` on
+`PreToolUse`. The installer is idempotent, backs up `~/.claude/settings.json`
+before merging, preserves hooks already there, and removes only its own on
+`--uninstall`. Restart Claude Code afterwards.
+
+`--no-hook` leaves only hand-routing from inside a Claude turn — the one mode
+measured to cost more than it saves. Turn either hook off individually with
+`FREELOADER_INTERCEPT=0` or `FREELOADER_CAP=0`.
 
 ## What it saved
 
@@ -129,21 +228,36 @@ scripts/stats.sh            # human summary
 scripts/stats.sh --json
 ```
 
-Every route appends a record to `~/.cache/freeloader-usage.jsonl`, so the
-premise is measured rather than asserted:
+Every route appends a record to `~/.cache/freeloader-usage.jsonl` with **both
+sides of the ledger** — what it saved, and what routing itself cost:
 
 ```
 freeloader — routed 12 of 13 prompts to a free model
   saved      ~3,410 Claude tokens  ≈ $0.0281 at claude-sonnet-5 rates
+  cost       $0.0180 — 3 extra request(s) re-sending the conversation
+  net        $0.0101
   free tier  8,200 tokens spent instead ($0)
   median     2100ms per routed prompt
+
+  by mode
+    cap                    4 route(s)   net $0.0812
+    hook                   6 route(s)   net $0.0164
+    turn                   3 route(s)   net -$0.0180
 ```
 
-The dollar figure is a deliberate under-estimate: it prices the prompt and reply
-only, not the conversation context answering in-session would have re-sent.
-Price the saving against a different model with `FREELOADER_PRICE_MODEL` /
-`FREELOADER_PRICE_IN` / `FREELOADER_PRICE_OUT` (defaults to Claude Sonnet 5, $2
-/ $10 per MTok).
+`net` is allowed to be negative, and for `turn` mode it usually is. Reporting
+only the saved column is how a tool talks you into believing a premise it is
+failing — the cost column is the whole reason the modes above exist. A route
+that fails is booked as pure cost: the conversation was re-sent to reach a model
+that then did not answer, and Claude answers anyway.
+
+Both figures still understate. The saving ignores that a capped tool result
+would have been re-read on every later turn; the cost uses the session
+transcript size as a proxy for the context (an over-estimate, recorded by the
+hook — deliberately the direction that flatters the project least). Price
+against a different model with `FREELOADER_PRICE_MODEL` / `FREELOADER_PRICE_IN`
+/ `FREELOADER_PRICE_OUT` / `FREELOADER_PRICE_CACHE_READ` (defaults to Claude
+Sonnet 5: $2 / $10 per MTok, cache reads at 0.1×).
 
 ## Tests
 
@@ -164,9 +278,11 @@ missing `timeout` marking every model broken; the brace-counting parser dropping
 a working model; an error-only stream being relayed as an answer), an assertion
 that no credential ever reaches stdout or stderr — verified to actually fail
 when a leak is introduced — both directions of the pre-send scan (what must
-never be sent, and the ordinary cheap prompts that must still route), and,
-under `INTEGRATION=1`, proof against the real CLI that the routed model reports
-**no tools** and cannot read a file out of the working directory. See
+never be sent, and the ordinary cheap prompts that must still route), the
+intercept refusing to fire on anything that touches the conversation and failing
+open everywhere else, the cap preserving the failure lines and the exit status,
+and, under `INTEGRATION=1`, proof against the real CLI that the routed model
+reports **no tools** and cannot read a file out of the working directory. See
 [`tests/README.md`](tests/README.md).
 
 ## Requirements

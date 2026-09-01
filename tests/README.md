@@ -19,8 +19,11 @@ budget. `integration_spec.sh` is the exception and is skipped unless
 |---|---|
 | `lib_spec.sh` | `run_with_timeout`, including the pure-shell watchdog used when `timeout` is absent |
 | `benchmark_spec.sh` | free-model discovery, probing, capability-then-speed ranking |
-| `route_spec.sh` | candidate selection, success detection, fallthrough, demotion, the usage log, the pre-send guard |
+| `route_spec.sh` | candidate selection, success detection, fallthrough, demotion, the two-sided ledger, the pre-send guard |
 | `scan_spec.sh` | what must never be sent, and what must still route |
+| `triage_spec.sh` | what can be answered with no conversation context — mostly what cannot |
+| `intercept_spec.sh` | answering before the Claude turn exists, and failing open in every other case |
+| `cap_spec.sh` | compressing large tool output without losing the failure or the exit status |
 | `tick_spec.sh` | conserve-mode counter, its cached state, and degradation |
 | `usage_spec.sh` | rate-limit reporting, and that no credential ever reaches stdout/stderr |
 | `stats_spec.sh` | the savings arithmetic over the usage log |

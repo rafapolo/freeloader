@@ -10,6 +10,22 @@ actually working, instead of spending Claude tokens on them. Everything runs
 through the `opencode` CLI, which must already be installed and authenticated
 (`opencode providers list` should show at least one provider).
 
+**Read this before routing anything.** Calling `route.sh` yourself, mid-turn, is
+the *worst* way to use this skill and usually loses money. You have already read
+the conversation; routing adds one more request that re-sends all of it, to save
+the handful of tokens you would have spent on the answer. Measured, that is
+negative for any conversation over a few hundred tokens — see the README.
+
+The modes that actually save are mechanical and need nothing from you:
+`hooks/intercept-hook.sh` answers a trivial prompt before your turn exists, and
+`hooks/cap-hook.sh` keeps huge command output out of the conversation. Both run
+without your involvement, which is the point.
+
+So: **prefer not routing by hand.** Do it when the user explicitly asks, and
+otherwise only for a prompt whose answer would be long (the saving scales with
+the output you avoid writing) — never for a one-word lookup, where the extra
+request costs more than the answer.
+
 The free model runs **sandboxed and tool-less** — no filesystem, no network, no
 repo — in an empty scratch directory. That is enforced mechanically by
 `agent/freeloader.json`, and if the sandbox fails to load, routing fails closed
@@ -128,6 +144,27 @@ with `scripts/tick.sh`, which prints
 `{"conserve_mode": bool, "turns_since_check": int, ...}`. It only spends real
 tokens on every 5th call — the other four read a cached value.
 
+## The two hooks that do the real work
+
+Neither needs anything from you; both are installed by `scripts/install.sh`.
+
+**`hooks/intercept-hook.sh`** (`UserPromptSubmit`) — answers a trivially
+self-contained prompt from a free model and blocks the turn, so the whole turn
+is saved rather than a few output tokens. `scripts/triage.sh` decides, and is
+extremely strict: anything with a pronoun, a path, a task verb, a paste, or the
+word "claude" goes to you instead. When it fires, you never see the prompt.
+
+**`hooks/cap-hook.sh`** (`PreToolUse`) — rewrites known-verbose Bash commands
+(test runners, builds) to pipe through `scripts/cap.sh`, which replaces a huge
+output with its head, its failure lines, a free-model summary, and its tail.
+This is the single biggest saving in the project, because a large tool result is
+re-read on every subsequent turn, not just the one it arrived on.
+
+When you see `[freeloader] output capped`, the full output is on disk at the
+path printed right below it — read that file if the summary is not enough.
+Never conclude a build passed from a summary alone; the verbatim failure lines
+are there for exactly that reason.
+
 ## Reporting what was saved
 
 ```
@@ -135,10 +172,11 @@ scripts/stats.sh            # human summary
 scripts/stats.sh --json     # machine-readable
 ```
 
-Every route appends a record to `~/.cache/freeloader-usage.jsonl`. If the user
-asks whether this is actually saving anything, run this rather than estimating.
-The dollar figure is deliberately conservative — it prices only the prompt and
-reply, not the conversation context that answering in-session would have re-sent.
+Every route appends a record to `~/.cache/freeloader-usage.jsonl`, with both
+sides of the ledger: what it saved, and what routing itself cost. `net` can be
+negative — that is not a bug, it is the honest answer for hand-routing inside a
+turn. If the user asks whether this saves anything, run this rather than
+estimating, and report the net rather than the saved figure.
 
 ## Notes
 

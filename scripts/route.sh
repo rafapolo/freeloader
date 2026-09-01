@@ -33,6 +33,13 @@ ADAPTIVE_TIMEOUT="${OPENCODE_FREE_ADAPTIVE_TIMEOUT:-true}"
 LATENCY_MULTIPLIER="${OPENCODE_FREE_LATENCY_MULTIPLIER:-6}"
 MIN_TIMEOUT_SECS="${OPENCODE_FREE_MIN_TIMEOUT:-20}"
 
+# Where this route was called from — it decides the whole economics, see the
+# ledger comment further down. turn (default) | hook | cap.
+MODE="${FREELOADER_ROUTE_MODE:-turn}"
+# For mode=cap: how many tokens of tool output were kept out of the
+# conversation. Meaningless in the other modes.
+DISPLACED_TOKENS="${FREELOADER_DISPLACED_TOKENS:-0}"
+
 prompt="${1:-}"
 if [ -z "$prompt" ] && [ ! -t 0 ]; then
   prompt="$(cat)"
@@ -181,16 +188,34 @@ for entry in "${candidates[@]}"; do
     tokens=$(oc_tokens "$stream")
     elapsed_ms=$(( ($(date +%s%N) - started) / 1000000 ))
 
-    # Rough but honest: ~4 chars/token, priced at the Claude model this would
-    # otherwise have run on. A conservative floor — the real saving is larger,
-    # because answering in-conversation would also have re-sent the surrounding
-    # context as input tokens, which this doesn't try to estimate.
+    # Both sides of the ledger, at ~4 chars/token.
+    #
+    # Which side a route lands on depends entirely on WHERE it was called from,
+    # and the difference is not marginal:
+    #
+    #   mode=turn — Claude called route.sh mid-conversation. Saved: the tokens
+    #     it would have spent answering. Cost: one extra request that re-sends
+    #     the entire conversation (cache-read rate), plus the reply arriving as
+    #     input. On a short answer the cost is routinely the larger number, and
+    #     the log has to be able to say so.
+    #
+    #   mode=hook — the prompt was answered in a UserPromptSubmit hook and the
+    #     Claude turn never happened. Saved: that whole turn — the context read
+    #     plus the output. Cost: nothing; there is no extra request to pay for.
+    #
+    #   mode=cap  — a large tool output was compressed before entering the
+    #     conversation. Saved: the tokens that never entered context (counted
+    #     once, though they would have been re-read on every later turn too).
     freeloader_log_route "$(jq -cn \
       --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       --arg model "$m" \
+      --arg mode "$MODE" \
       --arg baseline "$(freeloader_price_model)" \
       --argjson pin "$(freeloader_price_in)" \
       --argjson pout "$(freeloader_price_out)" \
+      --argjson pcache "$(freeloader_price_cache_read)" \
+      --argjson ctx "$(freeloader_context_tokens)" \
+      --argjson displaced "$DISPLACED_TOKENS" \
       --argjson prompt_chars "${#prompt}" \
       --argjson reply_chars "${#reply}" \
       --argjson free_tokens "$tokens" \
@@ -198,11 +223,30 @@ for entry in "${candidates[@]}"; do
       --argjson attempts "$(printf '%s\n' "${attempts[@]:-}" | jq -Rsc 'split("\n") | map(select(length>0))')" \
       '((($prompt_chars + 3) / 4) | floor) as $in
        | ((($reply_chars + 3) / 4) | floor) as $out
-       | {ts:$ts, ok:true, model:$model, elapsed_ms:$elapsed_ms,
+       | (if $mode == "hook" then
+            {input_tokens: $ctx, output_tokens: $out,
+             usd: (($ctx/1000000*$pcache) + ($out/1000000*$pout))}
+          elif $mode == "cap" then
+            {input_tokens: $displaced, output_tokens: 0,
+             usd: ($displaced/1000000*$pin)}
+          else
+            {input_tokens: $in, output_tokens: $out,
+             usd: (($in/1000000*$pin) + ($out/1000000*$pout))}
+          end) as $saved
+       | (if $mode == "turn" then
+            {usd: (($ctx/1000000*$pcache) + ($out/1000000*$pin)),
+             extra_request_tokens: $ctx,
+             note: "one extra request re-sending the conversation, plus the reply as input"}
+          else
+            {usd: 0, extra_request_tokens: 0,
+             note: "no extra Claude turn was needed"}
+          end) as $cost
+       | {ts:$ts, ok:true, mode:$mode, model:$model, elapsed_ms:$elapsed_ms,
           failed_first:$attempts,
           free_tokens:$free_tokens,
-          saved:{baseline_model:$baseline, input_tokens:$in, output_tokens:$out,
-                 usd: (($in/1000000*$pin) + ($out/1000000*$pout))}}')" 2>/dev/null
+          saved: ($saved + {baseline_model:$baseline}),
+          cost: $cost,
+          net_usd: ($saved.usd - $cost.usd)}')" 2>/dev/null
 
     printf '%s\n' "$reply"
     echo "[routed via $m]" >&2
@@ -214,10 +258,21 @@ for entry in "${candidates[@]}"; do
   [ "${FREELOADER_DEBUG:-}" = "1" ] && echo "[freeloader] $m failed — $reason" >&2
 done
 
+# A route that failed still cost an extra request in turn mode — the whole
+# conversation was re-sent to reach a model that then didn't answer, and Claude
+# answers anyway. Recording it as a plain failure with no cost would hide the
+# most expensive outcome the skill has.
 freeloader_log_route "$(jq -cn \
   --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --arg mode "$MODE" \
+  --argjson pcache "$(freeloader_price_cache_read)" \
+  --argjson ctx "$(freeloader_context_tokens)" \
   --argjson attempts "$(printf '%s\n' "${attempts[@]:-}" | jq -Rsc 'split("\n") | map(select(length>0))')" \
-  '{ts:$ts, ok:false, failed:$attempts}')" 2>/dev/null
+  '(if $mode == "turn" then ($ctx/1000000*$pcache) else 0 end) as $c
+   | {ts:$ts, ok:false, mode:$mode, failed:$attempts,
+      cost:{usd:$c, extra_request_tokens:(if $mode == "turn" then $ctx else 0 end),
+            note:"the conversation was re-sent to reach a model that did not answer"},
+      net_usd: (0 - $c)}')" 2>/dev/null
 
 echo "ALL_FREE_MODELS_FAILED" >&2
 exit 1

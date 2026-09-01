@@ -171,6 +171,69 @@ describe "route.sh — usage log"
       ok=$(printf "%s" "$(part "$r" 5)" | jq -r ".ok")
       expect_eq "$ok" "false"'
 
+    # The most expensive outcome the skill has: the whole conversation was
+    # re-sent to reach a model that then did not answer, and Claude answers
+    # anyway. Logging it as a costless failure would hide that entirely.
+    it "still books the cost of the request that was made" '
+      r=$(route_with "$TWO_OK" all_fail "what is 2+2" FREELOADER_STATE="$PWD/nonexistent" )
+      c=$(printf "%s" "$(part "$r" 5)" | jq -r ".cost.usd >= 0")
+      expect_eq "$c" "true"
+      n=$(printf "%s" "$(part "$r" 5)" | jq -r ".net_usd <= 0")
+      expect_eq "$n" "true" "a failed route can never net positive"'
+
+describe "route.sh — the two-sided ledger"
+
+  # Reporting only what was saved is how a skill talks you into believing a
+  # premise it is actually failing. A route made inside a Claude turn adds a
+  # request that re-sends the whole conversation; on a short answer that costs
+  # more than the answer was worth, and the log has to be able to say so.
+  context "when routing from inside a Claude turn"
+
+    it "books the extra request against the saving" '
+      r=$(route_with "$TWO_OK" ok "what is 2+2" FREELOADER_CONTEXT_FIXTURE=1)
+      mode=$(printf "%s" "$(part "$r" 5)" | jq -r ".mode")
+      expect_eq "$mode" "turn"
+      has=$(printf "%s" "$(part "$r" 5)" | jq -r "has(\"cost\") and has(\"net_usd\")")
+      expect_eq "$has" "true"'
+
+    it "nets negative once the conversation is large" '
+      r=$(
+        with_stub_path
+        stub_opencode
+        export RUN_BEHAVIOUR=ok
+        printf "%s" "$TWO_OK" > "$STUB_BIN/cache.json"
+        export OPENCODE_FREE_CACHE="$STUB_BIN/cache.json" OPENCODE_FREE_CACHE_MAX_AGE=99999
+        export FREELOADER_USAGE_LOG="$STUB_BIN/usage.jsonl"
+        printf "{\"context_tokens\":40000}" > "$STUB_BIN/state.json"
+        export FREELOADER_STATE="$STUB_BIN/state.json"
+        "$PROJECT_DIR/scripts/route.sh" "what is 2+2" >/dev/null 2>&1
+        cat "$STUB_BIN/usage.jsonl"
+      )
+      neg=$(printf "%s" "$r" | jq -r ".net_usd < 0")
+      expect_eq "$neg" "true" "a short answer cannot pay for a 40k-token re-send"'
+
+  context "when the same route is made from a hook instead"
+
+    # Same model, same prompt, same reply — the sign flips purely because no
+    # extra Claude turn had to happen.
+    it "nets positive" '
+      r=$(
+        with_stub_path
+        stub_opencode
+        export RUN_BEHAVIOUR=ok
+        printf "%s" "$TWO_OK" > "$STUB_BIN/cache.json"
+        export OPENCODE_FREE_CACHE="$STUB_BIN/cache.json" OPENCODE_FREE_CACHE_MAX_AGE=99999
+        export FREELOADER_USAGE_LOG="$STUB_BIN/usage.jsonl"
+        printf "{\"context_tokens\":40000}" > "$STUB_BIN/state.json"
+        export FREELOADER_STATE="$STUB_BIN/state.json" FREELOADER_ROUTE_MODE=hook
+        "$PROJECT_DIR/scripts/route.sh" "what is 2+2" >/dev/null 2>&1
+        cat "$STUB_BIN/usage.jsonl"
+      )
+      pos=$(printf "%s" "$r" | jq -r ".net_usd > 0")
+      expect_eq "$pos" "true"
+      c=$(printf "%s" "$r" | jq -r ".cost.usd")
+      expect_eq "$c" "0"'
+
 describe "route.sh — failure modes"
 
   context "when every candidate fails"

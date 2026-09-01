@@ -68,6 +68,20 @@ summary=$(jq -sR --arg since "$SINCE" '
         output_tokens: ($ok | map(.saved.output_tokens // 0) | add // 0),
         usd:           ($ok | map(.saved.usd // 0) | add // 0 | usd)
       },
+      # What routing itself cost. A route made from inside a Claude turn adds
+      # one more request that re-sends the whole conversation, and a route that
+      # then fails costs that with nothing to show for it. Reporting only the
+      # saved side is how a skill talks you into believing a premise it fails.
+      cost: {
+        usd:            ($all | map(.cost.usd // 0) | add // 0 | usd),
+        extra_requests: ($all | map(select((.cost.extra_request_tokens // 0) > 0)) | length)
+      },
+      net_usd: (($all | map(.net_usd // (.saved.usd // 0)) | add // 0) | usd),
+      by_mode: ( $all | group_by(.mode // "turn")
+                 | map({ mode: (.[0].mode // "turn"),
+                         routes: length,
+                         net_usd: (map(.net_usd // 0) | add // 0 | usd) })
+                 | sort_by(-.routes) ),
       free_tokens_spent: ($ok | map(.free_tokens.total // 0) | add // 0),
       median_ms: ( ($ok | map(.elapsed_ms // 0) | sort) as $s
                    | if ($s | length) == 0 then 0 else $s[($s | length / 2 | floor)] end ),
@@ -98,9 +112,19 @@ printf '%s' "$summary" | jq -r --arg log "$LOG" '
   "",
   "  saved      ~\(.saved.input_tokens + .saved.output_tokens) Claude tokens" +
     "  ≈ $\(.saved.usd | money) at \(.baseline_model // "?") rates",
+  "  cost       $\(.cost.usd | money) — \(.cost.extra_requests) extra request(s) re-sending the conversation",
+  (if .net_usd < 0 then
+     "  net        -$\((.net_usd | fabs) | money)  ← routing is costing more than it saves"
+   else
+     "  net        $\(.net_usd | money)"
+   end),
   "  free tier  \(.free_tokens_spent) tokens spent instead ($0)",
   "  median     \(.median_ms)ms per routed prompt",
   (if .routes_failed > 0 then "  fell back  \(.routes_failed) prompt(s) — Claude answered those" else empty end),
+  "",
+  "  by mode",
+  (.by_mode[] | "    " + (.mode | pad(46)) + "\(.routes) route(s)   net " +
+     (if .net_usd < 0 then "-$\((.net_usd | fabs) | money)" else "$\(.net_usd | money)" end)),
   "",
   "  by model",
   (.by_model[] | "    " + (.model | pad(46)) + "\(.routes) route(s)   $\(.usd | money)"),
