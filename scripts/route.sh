@@ -7,10 +7,13 @@
 #        echo "<prompt text>" | route.sh
 #
 # On success: reply on stdout, model name used on stderr, exit 0.
-# On failure: NO_FREE_MODEL_AVAILABLE or ALL_FREE_MODELS_FAILED on stderr, exit 1.
+# On failure (stderr, exit 1): PROMPT_CONTAINS_SENSITIVE_DATA,
+# NO_FREE_MODEL_AVAILABLE, ALL_FREE_MODELS_FAILED, or
+# FREELOADER_SANDBOX_UNAVAILABLE.
 #
 # The model runs sandboxed and tool-less — see agent/freeloader.json and
-# lib.sh's oc_run for why that is not optional.
+# lib.sh's oc_run for why that is not optional — and the prompt is scanned for
+# credentials and personal data before it is sent at all (scan.sh).
 set -uo pipefail
 
 # shellcheck source=lib.sh
@@ -37,6 +40,25 @@ fi
 if [ -z "$prompt" ]; then
   echo "usage: route.sh \"<prompt>\"  (or pipe prompt via stdin)" >&2
   exit 2
+fi
+
+# ---------------------------------------------------------------------------
+# pre-send guard
+# ---------------------------------------------------------------------------
+#
+# Before the cache, before any benchmark, before anything touches the network:
+# a prompt carrying credentials or personal data does not get sent to a free
+# third-party endpoint. See scan.sh for why this is code and not an instruction.
+#
+# Only the matched category names are reported — never the matched text, which
+# would just relocate the leak into stderr and the usage log.
+if ! findings=$(freeloader_scan_prompt "$prompt"); then
+  echo "PROMPT_CONTAINS_SENSITIVE_DATA: $(printf '%s' "$findings" | tr '\n' ' ')" >&2
+  freeloader_log_route "$(jq -cn \
+    --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --argjson categories "$(printf '%s' "$findings" | jq -Rsc 'split("\n") | map(select(length>0))')" \
+    '{ts:$ts, ok:false, blocked:"sensitive", categories:$categories}')" 2>/dev/null
+  exit 1
 fi
 
 # ---------------------------------------------------------------------------

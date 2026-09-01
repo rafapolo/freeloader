@@ -4,6 +4,21 @@
 FREELOADER_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FREELOADER_ROOT="$(cd "$FREELOADER_LIB_DIR/.." && pwd)"
 
+# The pre-send guard (freeloader_scan_prompt). Sourced here rather than only by
+# route.sh so that anything which grows the ability to send text to a free model
+# gets the check by default instead of having to remember it.
+#
+# If the file is missing (a half-copied install, a partial symlink), refuse
+# every prompt rather than letting an unchecked one through. Same reasoning as
+# the sandbox: a broken guard has to look like a broken guard, not like a
+# working one that happens to allow everything.
+if [ -r "$FREELOADER_LIB_DIR/scan.sh" ]; then
+  # shellcheck source=scan.sh
+  . "$FREELOADER_LIB_DIR/scan.sh"
+else
+  freeloader_scan_prompt() { echo "scanner-unavailable"; return 1; }
+fi
+
 # ---------------------------------------------------------------------------
 # timeout
 # ---------------------------------------------------------------------------

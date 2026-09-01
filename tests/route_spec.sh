@@ -214,6 +214,82 @@ describe "route.sh — failure modes"
       r=$(route_with "$EMPTY" ok "what is 2+2" MODELS_EMPTY=1)
       expect_eq "$(part "$r" 1)" "" "expected empty stdout"'
 
+describe "route.sh — pre-send guard"
+
+  # scan.sh has its own spec for what counts as sensitive. These examples check
+  # the wiring: that route.sh actually consults it, and that it does so before
+  # anything leaves the machine.
+  context "when the prompt carries a credential"
+
+    it "refuses to route it" '
+      r=$(route_with "$TWO_OK" echo "deploy with password: hunter2secret")
+      expect_status "$(part "$r" 3)" "1"
+      expect_contains "$(part "$r" 2)" "PROMPT_CONTAINS_SENSITIVE_DATA"'
+
+    # RUN_BEHAVIOUR=echo makes the stub reply with whatever prompt it received,
+    # so an empty stdout here is positive evidence that opencode was never
+    # invoked at all — not merely that its answer was dropped.
+    it "never sends it to a model" '
+      r=$(route_with "$TWO_OK" echo "deploy with password: hunter2secret")
+      expect_eq "$(part "$r" 1)" "" "expected the prompt never to reach a model"
+      expect_not_contains "$(part "$r" 1)" "hunter2secret"'
+
+    it "does not repeat the secret back on stderr" '
+      r=$(route_with "$TWO_OK" echo "deploy with password: hunter2secret")
+      expect_contains "$(part "$r" 2)" "credential"
+      expect_not_contains "$(part "$r" 2)" "hunter2secret"'
+
+    # A refusal is still a fallback to Claude, so stats.sh should see it — but
+    # the log lives on disk, and writing the offending prompt into it would
+    # persist the leak instead of preventing it.
+    it "logs the refusal by category, not by content" '
+      r=$(route_with "$TWO_OK" echo "deploy with password: hunter2secret")
+      b=$(printf "%s" "$(part "$r" 5)" | jq -r ".blocked")
+      expect_eq "$b" "sensitive"
+      expect_not_contains "$(part "$r" 5)" "hunter2secret"'
+
+  context "when the prompt carries personal data"
+
+    it "refuses an email address" '
+      r=$(route_with "$TWO_OK" echo "write a haiku about rafael.polo@gmail.com")
+      expect_status "$(part "$r" 3)" "1"
+      expect_contains "$(part "$r" 2)" "email"'
+
+    it "refuses a document number" '
+      r=$(route_with "$TWO_OK" echo "format this CPF nicely: 123.456.789-09")
+      expect_status "$(part "$r" 3)" "1"
+      expect_contains "$(part "$r" 2)" "national-id"'
+
+  # A guard that vanishes with its file is not a guard. If scan.sh goes missing
+  # the safe reading is "unchecked", not "clean".
+  context "when the scanner itself is missing"
+
+    it "refuses everything instead of routing unchecked" '
+      r=$(
+        with_stub_path
+        stub_opencode
+        staged="$STUB_BIN/staged"
+        mkdir -p "$staged/scripts" "$staged/agent"
+        cp "$PROJECT_DIR/scripts/lib.sh" "$PROJECT_DIR/scripts/route.sh" "$staged/scripts/"
+        cp "$PROJECT_DIR/agent/freeloader.json" "$staged/agent/"
+        printf "%s" "$TWO_OK" > "$STUB_BIN/cache.json"
+        export OPENCODE_FREE_CACHE="$STUB_BIN/cache.json" OPENCODE_FREE_CACHE_MAX_AGE=99999
+        export FREELOADER_USAGE_LOG="$STUB_BIN/usage.jsonl" RUN_BEHAVIOUR=echo
+        out=$("$staged/scripts/route.sh" "capital of Portugal?" 2>&1); status=$?
+        printf "%s\n---\n%s" "$out" "$status"
+      )
+      expect_contains "$(part "$r" 1)" "PROMPT_CONTAINS_SENSITIVE_DATA"
+      expect_contains "$(part "$r" 1)" "scanner-unavailable"
+      expect_status "$(part "$r" 2)" "1"'
+
+  # The guard has to be invisible on the traffic the skill exists to route.
+  context "with an ordinary cheap prompt"
+
+    it "routes it as before" '
+      r=$(route_with "$TWO_OK" ok "capital of Portugal? one word")
+      expect_status "$(part "$r" 3)" "0"
+      expect_contains "$(part "$r" 2)" "routed via"'
+
 describe "route.sh — input handling"
 
   context "with no prompt at all"

@@ -68,6 +68,32 @@ rest of the list. That failure is a broken install, not a bad model: every
 candidate would fail identically, and demoting them for it would poison a
 working ranking and force a needless re-benchmark.
 
+**The pre-send scan** — the sandbox stops the model *fetching* anything, but the
+prompt itself still goes to a third-party free tier. That half of "never route
+private data" used to be an instruction in `SKILL.md` — i.e. it depended on the
+model remembering, every prompt, forever. `scripts/scan.sh` makes it code:
+`route.sh` checks every prompt first and exits `PROMPT_CONTAINS_SENSITIVE_DATA`
+without sending anything, for API keys and private keys, JWTs and bearer
+tokens, `password:`/`API_KEY=` assignments, email addresses, phone numbers,
+Luhn-valid card numbers, and CPF/CNPJ/SSN/IBAN.
+
+It is biased toward false positives on purpose. A false positive costs one
+prompt answered by Claude — exactly what would have happened without the skill
+— while a miss cannot be undone, so there is no override flag. Documentation
+placeholders (`API_KEY=your_api_key_here`, `user@example.com`, `$MY_KEY`) are
+allowed through, because a guard that fires on every README teaches you to
+ignore it. Only the matched *category* is ever reported, never the matched text:
+otherwise the refusal would just relocate the leak into stderr and the log. A
+missing `scan.sh` refuses everything rather than routing unchecked.
+
+```
+scripts/scan.sh "text to check"   # prints categories, exit 1 if unsafe to route
+```
+
+It catches structured data, not prose — it cannot recognise a name or a private
+situation described in a sentence, so the judgment rule in `SKILL.md` still
+carries the rest.
+
 **Conserve mode** — `hooks/tick-hook.sh` runs as a `UserPromptSubmit` hook. It
 is silent in the normal case; 4 of every 5 calls just read a local cache (free),
 and every 5th shells out to `scripts/usage.sh --json` for your real Claude 5h/7d
@@ -137,9 +163,11 @@ Coverage includes the regressions that used to silently break the skill (a
 missing `timeout` marking every model broken; the brace-counting parser dropping
 a working model; an error-only stream being relayed as an answer), an assertion
 that no credential ever reaches stdout or stderr — verified to actually fail
-when a leak is introduced — and, under `INTEGRATION=1`, proof against the real
-CLI that the routed model reports **no tools** and cannot read a file out of the
-working directory.
+when a leak is introduced — both directions of the pre-send scan (what must
+never be sent, and the ordinary cheap prompts that must still route), and,
+under `INTEGRATION=1`, proof against the real CLI that the routed model reports
+**no tools** and cannot read a file out of the working directory. See
+[`tests/README.md`](tests/README.md).
 
 ## Requirements
 

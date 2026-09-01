@@ -14,8 +14,14 @@ The free model runs **sandboxed and tool-less** — no filesystem, no network, n
 repo — in an empty scratch directory. That is enforced mechanically by
 `agent/freeloader.json`, and if the sandbox fails to load, routing fails closed
 rather than falling back to a tool-enabled agent. It is not a matter of judgment
-on your part, but see the no-route list below anyway: the prompt text you send
-is still leaving the machine.
+on your part.
+
+Neither is the prompt text: `scripts/scan.sh` checks every prompt for
+credentials and personal data before it is sent, and `route.sh` refuses to send
+one that trips it. But that guard only catches *structured* things — keys,
+emails, card and document numbers. It cannot recognise a name, a health detail,
+or a private situation described in prose, so the no-route list below is still
+yours to apply.
 
 ## Is this prompt "cheap"?
 
@@ -38,7 +44,8 @@ Do NOT route when the request:
   data into a routed prompt — that includes personal info (names, emails,
   addresses, phone numbers, account/financial details) about the user or
   anyone else. If a prompt can't be scrubbed of it while staying useful, keep
-  it with Claude instead of routing.
+  it with Claude instead of routing. The scanner backs this up for the
+  recognisable cases; it does not replace the judgment for the rest.
 - is one the user is clearly asking Claude specifically to handle
 
 If genuinely unsure, don't route — just answer normally. Never route silently
@@ -80,6 +87,13 @@ bar, not the hard no-route list.
    - stderr on success names which model answered, e.g. `[routed via opencode/big-pickle]`.
    - On `NO_FREE_MODEL_AVAILABLE` or `ALL_FREE_MODELS_FAILED` (stderr, exit 1),
      just answer the prompt yourself instead — don't retry in a loop.
+   - On `PROMPT_CONTAINS_SENSITIVE_DATA: <categories>` (stderr, exit 1), the
+     prompt was never sent — it matched the credential/personal-data scan.
+     **Answer it yourself.** Do not retry it, do not rephrase or redact it to
+     get it past the guard, and do not route a summary of it either. Mention to
+     the user that it stayed with you and why (name the category, not the
+     value). If they insist it was a false positive, they can confirm with
+     `scripts/scan.sh "<text>"` — but the answer is still yours to give.
    - On `FREELOADER_SANDBOX_UNAVAILABLE` (stderr, exit 1), the tool-less agent
      config could not be loaded, so routing refused to run rather than handing
      a free model an unsandboxed session. Answer the prompt yourself, **stop
@@ -135,6 +149,14 @@ reply, not the conversation context that answering in-session would have re-sent
   `{"*": false}` wildcard is not supported and silently breaks replies), and
   `--dir` points the session at an empty scratch dir. Tool names must be
   maintained by hand: a newly added opencode tool arrives *enabled*.
+- **The scan is not optional either, and has no override.** `scripts/scan.sh`
+  is deliberately biased toward false positives: a false positive costs one
+  prompt answered by Claude — what would have happened anyway without this
+  skill — while a miss posts a credential or someone's personal data to a free
+  endpoint, permanently. It reports matched *categories* only, never the
+  matched text, so the value never reaches stderr, the transcript, or the usage
+  log. If `scan.sh` is missing entirely, every prompt is refused
+  (`scanner-unavailable`) rather than sent unchecked.
 - **Never trust `opencode run`'s exit status.** It exits 0 even when the entire
   event stream is `{"type":"error"}`. `route.sh` parses `--format json` and
   requires no error event, a `step_finish`, and non-empty text before relaying
